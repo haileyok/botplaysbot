@@ -331,6 +331,7 @@ func (v *Verifier) serveWrapped(ctx context.Context, w http.ResponseWriter, r *x
 		if mode == Required {
 			return xrpcserver.AuthRequired("authentication required")
 		}
+		v.logRequest(r, "")
 		return h.ServeXRPC(ctx, w, r)
 	}
 
@@ -341,6 +342,7 @@ func (v *Verifier) serveWrapped(ctx context.Context, w http.ResponseWriter, r *x
 		}
 		// Public endpoint with an unusable header: serve anonymously rather
 		// than rejecting.
+		v.logRequest(r, "")
 		return h.ServeXRPC(ctx, w, r)
 	}
 
@@ -350,5 +352,16 @@ func (v *Verifier) serveWrapped(ctx context.Context, w http.ResponseWriter, r *x
 		return xrpcserver.RateLimited("rate limit exceeded")
 	}
 
+	v.logRequest(r, id.DID)
 	return h.ServeXRPC(WithIdentity(ctx, id), w, r)
+}
+
+// logRequest logs an /xrpc request at debug level. It carries the caller's
+// DID when authenticated — never the bearer token or any session material.
+func (v *Verifier) logRequest(r *xrpcserver.Request, did string) {
+	args := []any{"nsid", r.NSID}
+	if did != "" {
+		args = append(args, "did", did)
+	}
+	v.logger.Debug("xrpc request", args...)
 }
