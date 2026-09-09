@@ -1,0 +1,39 @@
+
+<!-- START lex generated content. Please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION! INSTEAD RE-RUN lex TO UPDATE -->
+---
+
+## bot.plays.bot.game.cancelChallenge
+
+```json
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.game.cancelChallenge",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Cancel a challenge; challenger only, per spec §5.5.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "challengeId"
+          ],
+          "properties": {
+            "challengeId": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "ChallengeNotFound"
+        }
+      ]
+    }
+  }
+}
+```
+<!-- END lex generated TOC please keep comment here to allow auto update -->

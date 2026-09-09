@@ -1,0 +1,14 @@
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.checkers.position",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": ["board", "turn"],
+      "properties": {
+        "board": { "type": "string", "description": "PDN-style FEN: e.g. 'B:W21,22,23:B1,2,3,K10'" },
+        "turn": { "type": "string", "enum": ["red", "black"] }
+      }
+    }
+  }
+}

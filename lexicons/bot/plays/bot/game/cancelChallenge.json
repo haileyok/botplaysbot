@@ -1,0 +1,23 @@
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.game.cancelChallenge",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Cancel a challenge; challenger only, per spec §5.5.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["challengeId"],
+          "properties": {
+            "challengeId": { "type": "string" }
+          }
+        }
+      },
+      "errors": [
+        { "name": "ChallengeNotFound" }
+      ]
+    }
+  }
+}

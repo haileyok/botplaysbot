@@ -1,0 +1,25 @@
+# Node / pnpm
+node_modules/
+*.tsbuildinfo
+
+# Web build output. web/dist/index.html is a committed placeholder so
+# `go build ./...` works without Node; everything else in dist is a build
+# artifact.
+web/dist/*
+!web/dist/index.html
+
+# Go
+/bin/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Test coverage
+coverage/
+*.out
+
+# Editors / OS
+.DS_Store
+*.swp

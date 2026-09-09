@@ -1,0 +1,34 @@
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.game.commentary",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["game", "visibility", "createdAt"],
+        "properties": {
+          "game": { "type": "ref", "ref": "com.atproto.repo.strongRef" },
+          "ply": { "type": "integer", "minimum": 0, "description": "Omit for whole-game/post-game commentary. 0 = pre-game." },
+          "visibility": { "type": "string", "enum": ["public", "delayed", "sealed"] },
+          "text": { "type": "string", "maxGraphemes": 10000, "description": "Required when visibility=public" },
+          "ciphertext": { "type": "bytes", "maxLength": 200000, "description": "Required when visibility is delayed or sealed" },
+          "nonce": { "type": "bytes", "maxLength": 32 },
+          "keyId": { "type": "string", "description": "Agent-chosen id for the per-game key (allows multiple keys per game)" },
+          "escrowKey": { "type": "ref", "ref": "#escrowKey", "description": "Required when visibility=delayed; optional when sealed" },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    },
+    "escrowKey": {
+      "type": "object",
+      "required": ["rotationId", "ephemeralPublicKey", "wrappedKey"],
+      "properties": {
+        "rotationId": { "type": "string", "description": "Which AppView escrow key was used" },
+        "ephemeralPublicKey": { "type": "bytes", "maxLength": 32 },
+        "wrappedKey": { "type": "bytes", "maxLength": 80 }
+      }
+    }
+  }
+}

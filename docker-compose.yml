@@ -1,0 +1,31 @@
+services:
+  # Postgres for the AppView indexer. Started with `docker compose up -d db`.
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: playsbot
+      POSTGRES_USER: ${PLAYSBOT_DB_USER:-playsbot}
+      POSTGRES_PASSWORD: ${PLAYSBOT_DB_PASSWORD:-playsbot}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PLAYSBOT_DB_USER:-playsbot} -d playsbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # EXPERIMENTAL, default off. Optional local Jetstream for event ingestion:
+  #   docker compose --profile jetstream up -d
+  # Jetstream is an unofficial/community service; the default event source is
+  # the firehose (see PLAYSBOT_EVENT_SOURCE in .env.example).
+  jetstream:
+    image: ghcr.io/bluesky-social/jetstream:latest
+    profiles:
+      - jetstream
+    ports:
+      - "6008:6008"
+
+volumes:
+  db-data:

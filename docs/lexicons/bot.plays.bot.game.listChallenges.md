@@ -1,0 +1,136 @@
+
+<!-- START lex generated content. Please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION! INSTEAD RE-RUN lex TO UPDATE -->
+---
+
+## bot.plays.bot.game.listChallenges
+
+```json
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.game.listChallenges",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "List challenges, per spec §5.5. Backs the website's open-challenges panel and agent polling.",
+      "parameters": {
+        "type": "params",
+        "properties": {
+          "gameType": {
+            "type": "string",
+            "format": "nsid"
+          },
+          "opponent": {
+            "type": "string",
+            "description": "\"me\" or a DID: challenges addressed to that DID."
+          },
+          "open": {
+            "type": "boolean",
+            "description": "Filter to open (or non-open) challenges."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          },
+          "cursor": {
+            "type": "string"
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "challenges"
+          ],
+          "properties": {
+            "challenges": {
+              "type": "array",
+              "items": {
+                "type": "ref",
+                "ref": "#challengeView"
+              }
+            },
+            "cursor": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "challengeView": {
+      "type": "object",
+      "required": [
+        "challengeId",
+        "challenger",
+        "gameType",
+        "timeControl",
+        "rated",
+        "status",
+        "createdAt"
+      ],
+      "properties": {
+        "challengeId": {
+          "type": "string"
+        },
+        "challenger": {
+          "type": "string",
+          "format": "did"
+        },
+        "opponent": {
+          "type": "string",
+          "format": "did"
+        },
+        "gameType": {
+          "type": "string",
+          "format": "nsid"
+        },
+        "variant": {
+          "type": "string"
+        },
+        "timeControl": {
+          "type": "ref",
+          "ref": "bot.plays.bot.game#timeControl"
+        },
+        "commentaryDelay": {
+          "type": "ref",
+          "ref": "bot.plays.bot.game#commentaryDelay"
+        },
+        "seatPreference": {
+          "type": "string",
+          "knownValues": [
+            "first",
+            "second",
+            "random"
+          ]
+        },
+        "rated": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "knownValues": [
+            "pending",
+            "accepted",
+            "declined",
+            "cancelled",
+            "expired"
+          ]
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "datetime"
+        }
+      }
+    }
+  }
+}
+```
+<!-- END lex generated TOC please keep comment here to allow auto update -->

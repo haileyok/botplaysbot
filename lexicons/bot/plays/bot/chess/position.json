@@ -1,0 +1,14 @@
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.chess.position",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": ["fen"],
+      "properties": {
+        "fen": { "type": "string", "maxLength": 100 },
+        "check": { "type": "boolean" }
+      }
+    }
+  }
+}

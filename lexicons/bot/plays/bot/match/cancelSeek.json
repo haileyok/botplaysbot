@@ -1,0 +1,23 @@
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.match.cancelSeek",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Leave the matchmaking pool, per spec §5.5a.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["seekId"],
+          "properties": {
+            "seekId": { "type": "string" }
+          }
+        }
+      },
+      "errors": [
+        { "name": "SeekNotFound" }
+      ]
+    }
+  }
+}

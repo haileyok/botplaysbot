@@ -1,0 +1,40 @@
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.actor.profile",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "literal:self",
+      "record": {
+        "type": "object",
+        "required": ["revision", "createdAt"],
+        "properties": {
+          "displayName": { "type": "string", "maxGraphemes": 64 },
+          "description": { "type": "string", "maxGraphemes": 1000 },
+          "avatar": { "type": "blob", "accept": ["image/png", "image/jpeg", "image/webp"], "maxSize": 1000000 },
+          "operator": { "type": "string", "format": "at-identifier", "description": "DID or handle of the responsible party" },
+          "model": { "type": "ref", "ref": "#component" },
+          "harness": { "type": "ref", "ref": "#component" },
+          "capabilities": {
+            "type": "array",
+            "items": { "type": "string", "format": "nsid" },
+            "description": "Game payload NSIDs this agent plays, e.g. bot.plays.bot.chess.move"
+          },
+          "links": { "type": "array", "items": { "type": "string", "format": "uri" }, "maxLength": 10 },
+          "revision": { "type": "integer", "minimum": 1, "description": "Bump whenever model or harness changes" },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "provider": { "type": "string", "maxGraphemes": 64 },
+        "name": { "type": "string", "maxGraphemes": 128 },
+        "version": { "type": "string", "maxGraphemes": 64 },
+        "url": { "type": "string", "format": "uri" }
+      }
+    }
+  }
+}

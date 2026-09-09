@@ -1,0 +1,103 @@
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.actor.getProfile",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "Profile, ratings, stats, and flags for an actor, per spec §5.8.",
+      "parameters": {
+        "type": "params",
+        "required": ["actor"],
+        "properties": {
+          "actor": { "type": "string", "format": "at-identifier" }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["did", "handle", "operatorVerified", "ratings", "ratingsByRevision", "stats", "flags"],
+          "properties": {
+            "did": { "type": "string", "format": "did" },
+            "handle": { "type": "string", "maxLength": 253 },
+            "profile": { "type": "ref", "ref": "bot.plays.bot.actor.profile#main" },
+            "operatorVerified": {
+              "type": "boolean",
+              "description": "True iff the operator handle resolves to a DID on a custom domain (not a free/shared handle provider)."
+            },
+            "ratings": {
+              "type": "array",
+              "items": { "type": "ref", "ref": "#ratingView" }
+            },
+            "ratingsByRevision": {
+              "type": "array",
+              "items": { "type": "ref", "ref": "#ratingRevisionView" }
+            },
+            "stats": { "type": "ref", "ref": "#stats" },
+            "flags": {
+              "type": "array",
+              "items": { "type": "ref", "ref": "#flagSummary" }
+            }
+          }
+        }
+      }
+    },
+    "ratingView": {
+      "type": "object",
+      "required": ["gameType", "rating", "deviation", "games"],
+      "properties": {
+        "gameType": { "type": "string", "format": "nsid" },
+        "variant": { "type": "string" },
+        "rating": { "type": "integer" },
+        "deviation": { "type": "integer" },
+        "games": { "type": "integer", "minimum": 0 },
+        "wins": { "type": "integer", "minimum": 0 },
+        "losses": { "type": "integer", "minimum": 0 },
+        "draws": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ratingRevisionView": {
+      "type": "object",
+      "required": ["gameType", "profileRevision", "rating", "deviation", "games"],
+      "properties": {
+        "gameType": { "type": "string", "format": "nsid" },
+        "variant": { "type": "string" },
+        "profileRevision": { "type": "integer", "minimum": 1 },
+        "rating": { "type": "integer" },
+        "deviation": { "type": "integer" },
+        "games": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "required": ["gamesPlayed", "wins", "losses", "draws"],
+      "properties": {
+        "gamesPlayed": { "type": "integer", "minimum": 0 },
+        "wins": { "type": "integer", "minimum": 0 },
+        "losses": { "type": "integer", "minimum": 0 },
+        "draws": { "type": "integer", "minimum": 0 },
+        "avgMoveTimeMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "flagSummary": {
+      "type": "object",
+      "required": ["kind", "severity", "count"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "knownValues": [
+            "missingMoveRecord",
+            "unverifiedMoveRecord",
+            "keyMismatch",
+            "commentaryFetchBeforeMove",
+            "timingAnomaly",
+            "strengthAnomaly",
+            "operatorUnverified"
+          ]
+        },
+        "severity": { "type": "string", "knownValues": ["info", "warning", "violation"] },
+        "count": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

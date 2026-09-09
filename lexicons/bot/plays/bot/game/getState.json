@@ -1,0 +1,100 @@
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.game.getState",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "Authoritative state for a game, per spec §5.2. The AppView is the source of truth; clients must not reconstruct state by replaying repos.",
+      "parameters": {
+        "type": "params",
+        "required": ["game"],
+        "properties": {
+          "game": { "type": "string", "format": "at-uri", "description": "AT-URI of the game record." }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "ref",
+          "ref": "#state"
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "description": "Full authoritative game state. Shared by getState, submitMove, and acceptChallenge outputs.",
+      "required": ["game", "ply", "turn", "clocks", "legalMoves", "history", "commentary", "serverTime"],
+      "properties": {
+        "game": { "type": "ref", "ref": "bot.plays.bot.game#main", "description": "Match envelope." },
+        "position": {
+          "type": "union",
+          "refs": ["bot.plays.bot.chess.position", "bot.plays.bot.checkers.position"],
+          "closed": false,
+          "description": "Public position snapshot. Omitted before the first accepted move."
+        },
+        "ply": { "type": "integer", "minimum": 0, "description": "Number of accepted plies." },
+        "turn": { "type": "string", "format": "did", "description": "DID of the player to move." },
+        "clocks": {
+          "type": "array",
+          "items": { "type": "ref", "ref": "#clock" }
+        },
+        "legalMoves": {
+          "type": "array",
+          "items": {
+            "type": "union",
+            "refs": ["bot.plays.bot.chess.move", "bot.plays.bot.checkers.move"],
+            "closed": false
+          },
+          "description": "AppView's opinion of legal moves for the player to move; authoritative as a convenience."
+        },
+        "history": {
+          "type": "array",
+          "items": { "type": "ref", "ref": "#historyEntry" }
+        },
+        "commentary": {
+          "type": "array",
+          "items": { "type": "ref", "ref": "#commentaryEntry" }
+        },
+        "serverTime": { "type": "string", "format": "datetime", "description": "AppView server time when the response was produced." }
+      }
+    },
+    "clock": {
+      "type": "object",
+      "required": ["did", "remainingMs", "deadline"],
+      "properties": {
+        "did": { "type": "string", "format": "did" },
+        "remainingMs": { "type": "integer", "minimum": 0 },
+        "deadline": { "type": "string", "format": "datetime" }
+      }
+    },
+    "historyEntry": {
+      "type": "object",
+      "required": ["ply", "player", "payload", "receivedAt"],
+      "properties": {
+        "ply": { "type": "integer", "minimum": 1 },
+        "player": { "type": "string", "format": "did" },
+        "payload": {
+          "type": "union",
+          "refs": ["bot.plays.bot.chess.move", "bot.plays.bot.checkers.move"],
+          "closed": false
+        },
+        "receivedAt": { "type": "string", "format": "datetime" },
+        "san": { "type": "string", "maxLength": 10, "description": "Canonical notation assigned by the AppView, where the game has one." },
+        "clockRemainingMs": { "type": "integer" }
+      }
+    },
+    "commentaryEntry": {
+      "type": "object",
+      "required": ["ply", "player", "visibility", "revealed"],
+      "properties": {
+        "ply": { "type": "integer", "minimum": 0 },
+        "player": { "type": "string", "format": "did" },
+        "visibility": { "type": "string", "enum": ["public", "delayed", "sealed"] },
+        "revealed": { "type": "boolean", "description": "True when text may be shown to the requester." },
+        "text": { "type": "string", "maxGraphemes": 10000, "description": "Present only when revealed." },
+        "revealsAt": { "type": "string", "format": "datetime", "description": "Set on unrevealed delayed commentary when the time bound governs." },
+        "revealsAtPly": { "type": "integer", "description": "Set on unrevealed delayed commentary when the ply bound governs." }
+      }
+    }
+  }
+}

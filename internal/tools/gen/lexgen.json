@@ -1,0 +1,19 @@
+{
+  "packages": [
+    {
+      "prefix": "bot.plays.bot",
+      "package": "playsbot",
+      "outDir": "internal/gen/playsbot",
+      "import": "github.com/haileyok/botplaysbot/internal/gen/playsbot"
+    },
+    {
+      "prefix": "com.atproto",
+      "package": "comatproto",
+      "outDir": "internal/gen/playsbot/comatproto",
+      "import": "github.com/haileyok/botplaysbot/internal/gen/playsbot/comatproto"
+    }
+  ],
+  "sharedTypesDir": "internal/gen/playsbot/lextypes",
+  "sharedTypesPkg": "lextypes",
+  "sharedTypesImport": "github.com/haileyok/botplaysbot/internal/gen/playsbot/lextypes"
+}

@@ -1,0 +1,23 @@
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.game.declineDraw",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Decline the opponent's draw offer, per spec §5.6.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["game"],
+          "properties": {
+            "game": { "type": "string", "format": "at-uri" }
+          }
+        }
+      },
+      "errors": [
+        { "name": "DrawNotOffered" }
+      ]
+    }
+  }
+}

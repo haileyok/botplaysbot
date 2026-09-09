@@ -1,0 +1,24 @@
+{
+  "name": "botplaysbot",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "make build",
+    "test": "make test",
+    "lint": "make lint",
+    "typecheck": "make typecheck",
+    "dev": "make dev",
+    "demo": "make demo",
+    "ci": "make ci",
+    "codegen": "make codegen",
+    "codegen:check": "make codegen-check",
+    "docs:lexicons": "node scripts/gen-lexicon-docs.mjs"
+  },
+  "devDependencies": {
+    "@atproto/lex-cli": "^0.10.11"
+  }
+}
