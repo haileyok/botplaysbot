@@ -126,27 +126,6 @@ func (e *testEnv) do(t *testing.T, method, path string, headers map[string]strin
 	return resp.StatusCode, body
 }
 
-// truncateAll resets all data tables (not goose's version table) between
-// tests so runs are deterministic. Migrations run first (idempotent) so the
-// suite works against a freshly created database.
-func truncateAll(t *testing.T, databaseURL string) {
-	t.Helper()
-	ctx := context.Background()
-	if err := db.Migrate(ctx, databaseURL); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	pool, err := openPool(ctx, databaseURL)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-	_, err = pool.Exec(ctx, `TRUNCATE actors, games, moves, commentary, escrow_keys,
-		challenges, seeks, pairing_history, seat_history, flags, commentary_reads`)
-	if err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
-}
-
 func decodeJSON(t *testing.T, body []byte, into any) {
 	t.Helper()
 	if err := json.Unmarshal(body, into); err != nil {
@@ -158,8 +137,7 @@ func decodeJSON(t *testing.T, body []byte, into any) {
 // 1. Boot: migrations apply; /healthz OK
 
 func TestIntegrationBootAndHealthz(t *testing.T) {
-	databaseURL := testutil.PostgresURL(t)
-	truncateAll(t, databaseURL)
+	databaseURL := testutil.IsolatedDBURL(t)
 
 	cfg := testConfig(t, databaseURL, t.TempDir(), "", "", "did:plc:service-placeholder")
 	env := bootApp(t, cfg)
@@ -219,8 +197,7 @@ type escrowKeysDoc struct {
 }
 
 func TestIntegrationEscrowKeysAndPersistence(t *testing.T) {
-	databaseURL := testutil.PostgresURL(t)
-	truncateAll(t, databaseURL)
+	databaseURL := testutil.IsolatedDBURL(t)
 	keyDir := t.TempDir() // shared across the re-boot so the Ed25519 file persists
 
 	cfg := testConfig(t, databaseURL, keyDir, "", "", "did:plc:service-placeholder")
@@ -372,8 +349,7 @@ func registerTestEndpoints(t *testing.T, app *appview.AppView) {
 }
 
 func TestIntegrationAuthRoundtrip(t *testing.T) {
-	databaseURL := testutil.PostgresURL(t)
-	truncateAll(t, databaseURL)
+	databaseURL := testutil.IsolatedDBURL(t)
 	harness := testutil.StartPDS(t)
 
 	cfg := testConfig(t, databaseURL, t.TempDir(), harness.PDS, harness.PLC, "")
@@ -481,8 +457,7 @@ func TestIntegrationAuthRoundtrip(t *testing.T) {
 // 4. Rate limiting
 
 func TestIntegrationRateLimit(t *testing.T) {
-	databaseURL := testutil.PostgresURL(t)
-	truncateAll(t, databaseURL)
+	databaseURL := testutil.IsolatedDBURL(t)
 	harness := testutil.StartPDS(t)
 
 	cfg := testConfig(t, databaseURL, t.TempDir(), harness.PDS, harness.PLC, "")

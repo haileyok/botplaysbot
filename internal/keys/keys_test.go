@@ -7,9 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/haileyok/botplaysbot/internal/db"
+	"github.com/haileyok/botplaysbot/internal/testutil"
 )
 
 func TestLoadOrCreateSigningKeyGeneratesAndPersists(t *testing.T) {
@@ -55,10 +53,12 @@ func TestLoadOrCreateSigningKeyRejectsGarbage(t *testing.T) {
 }
 
 // TestEscrowDirectoryLifecycle runs against a live Postgres when DATABASE_URL
-// points at one; it skips with a clear message otherwise (the integration
-// suite in internal/appview covers the DB-backed flow end to end).
+// points at one; it skips with a clear message otherwise. Each run gets an
+// isolated, freshly migrated throwaway database (testutil.IsolatedDB), so it
+// cannot collide with the appview integration suite running in parallel (the
+// integration suite in internal/appview covers the DB-backed flow end to end).
 func TestEscrowDirectoryLifecycle(t *testing.T) {
-	pool := testPool(t)
+	pool := testutil.IsolatedDB(t)
 	defer pool.Close()
 	ctx := context.Background()
 
@@ -112,31 +112,4 @@ func TestEscrowDirectoryLifecycle(t *testing.T) {
 	if cur.RotationID != k3.RotationID {
 		t.Fatalf("current = %s, want newest rotation %s", cur.RotationID, k3.RotationID)
 	}
-}
-
-// testPool connects to DATABASE_URL or skips the test. Each test truncates
-// escrow_keys first so rotations do not leak between runs.
-func testPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("integration test: set DATABASE_URL to a live Postgres to run (make gate: docker compose up -d db)")
-	}
-	pool, err := db.OpenPool(context.Background(), databaseURL)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	if err := db.Ping(context.Background(), pool); err != nil {
-		pool.Close()
-		t.Skipf("integration test: Postgres unavailable: %v", err)
-	}
-	if err := db.Migrate(context.Background(), databaseURL); err != nil {
-		pool.Close()
-		t.Fatalf("migrate: %v", err)
-	}
-	if _, err := pool.Exec(context.Background(), `TRUNCATE escrow_keys`); err != nil {
-		pool.Close()
-		t.Fatalf("truncate escrow_keys (migrations applied?): %v", err)
-	}
-	return pool
 }

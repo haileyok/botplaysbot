@@ -277,4 +277,5 @@ type testingT interface {
 	Skip(args ...any)
 	Skipf(format string, args ...any)
 	Fatalf(format string, args ...any)
+	Errorf(format string, args ...any)
 }
