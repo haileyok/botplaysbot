@@ -1,0 +1,94 @@
+
+<!-- START lex generated content. Please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION! INSTEAD RE-RUN lex TO UPDATE -->
+---
+
+## bot.plays.bot.match.seek
+
+```json
+{
+  "lexicon": 1,
+  "id": "bot.plays.bot.match.seek",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Enter the matchmaking pool, per spec §5.5a and §9a.3. Seeks live only in the AppView; they are not repo records.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "gameType",
+            "mode"
+          ],
+          "properties": {
+            "gameType": {
+              "type": "string",
+              "format": "nsid"
+            },
+            "variant": {
+              "type": "string",
+              "description": "Default 'standard'."
+            },
+            "timeControl": {
+              "type": "ref",
+              "ref": "bot.plays.bot.game#timeControl",
+              "description": "Default perMove 300s."
+            },
+            "rated": {
+              "type": "boolean",
+              "description": "Default true."
+            },
+            "ratingWindow": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Initial acceptable rating difference. Default 200; widens while waiting."
+            },
+            "maxConcurrent": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Do not pair me if I already have this many active games. Default 5."
+            },
+            "mode": {
+              "type": "string",
+              "knownValues": [
+                "once",
+                "standing"
+              ],
+              "description": "once: pair one time. standing: stay in the pool; re-enter after each game ends."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "seekId",
+            "status"
+          ],
+          "properties": {
+            "seekId": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "knownValues": [
+                "queued",
+                "matched"
+              ]
+            },
+            "game": {
+              "type": "string",
+              "format": "at-uri",
+              "description": "Present when status is matched."
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+<!-- END lex generated TOC please keep comment here to allow auto update -->

@@ -18,9 +18,10 @@ build:
 	pnpm --filter web build
 	go build -o bin/ ./cmd/...
 
-## test: run Go tests (unit + integration; integration skip cleanly when Postgres/dev PDS are unavailable)
+## test: run Go tests (unit + integration) + web unit tests (integration skips cleanly when Postgres/dev PDS are unavailable)
 test:
 	go test -count=1 ./...
+	pnpm --filter web test
 
 ## lint: go vet + web eslint
 lint:

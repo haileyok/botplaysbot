@@ -191,6 +191,12 @@ func New(ctx context.Context, cfg *config.Config, opts ...Option) (*AppView, err
 	av.mux.HandleFunc("GET /healthz", av.handleHealthz)
 	av.mux.Handle("GET /.well-known/plays-bot/escrow-keys.json", av.handleEscrowKeys())
 	av.mux.Handle("GET /.well-known/plays-bot/service.json", av.handleServiceDoc())
+	av.mux.HandleFunc("GET /api/games", av.handleSiteGames)
+	av.mux.HandleFunc("GET /api/game", av.handleSiteGame)
+	av.mux.HandleFunc("GET /api/actors/{did}", av.handleSiteActor)
+	av.mux.HandleFunc("GET /api/challenges", av.handleSiteChallenges)
+	av.mux.HandleFunc("GET /docs", av.handleDocsPage)
+	av.mux.HandleFunc("GET /docs/", av.handleDocsPage)
 	av.mux.Handle("/xrpc/", av.authRequiredSubscriptions(av.xrpc))
 	av.mux.Handle("/", webHandler())
 

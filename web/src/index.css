@@ -11,21 +11,157 @@ body {
   min-height: 100vh;
 }
 
-.app {
-  max-width: 60rem;
+.page {
+  max-width: 72rem;
   margin: 0 auto;
-  padding: 2rem 1.25rem;
+  padding: 1.5rem 1.25rem;
 }
 
-h1 {
-  font-size: 1.75rem;
-  margin: 0 0 0.5rem;
-}
+h1 { font-size: 1.6rem; margin: 0 0 0.5rem; }
+h2 { font-size: 1.15rem; margin: 1.25rem 0 0.5rem; }
 
-code {
+code, .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
   background: rgba(255, 255, 255, 0.08);
-  padding: 0.1rem 0.35rem;
+  padding: 0.1rem 0.3rem;
   border-radius: 4px;
+}
+
+.small { font-size: 0.8rem; }
+.muted { opacity: 0.65; }
+.empty { opacity: 0.55; font-style: italic; }
+.error { color: #ff8f8f; }
+
+.nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.nav .brand { font-weight: 700; text-decoration: none; color: inherit; }
+.nav-links { display: flex; gap: 1rem; }
+.nav a { color: inherit; }
+
+.footer {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1rem 1.25rem 2rem;
+  opacity: 0.5;
+}
+
+.conn { font-size: 0.75rem; opacity: 0.6; letter-spacing: 0.05em; text-transform: uppercase; }
+
+/* Live grid */
+.game-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.75rem;
+}
+.game-card {
+  display: block;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 0.75rem;
+  text-decoration: none;
+  color: inherit;
+}
+.game-card:hover { border-color: rgba(255, 255, 255, 0.4); }
+.game-card-players { display: flex; flex-direction: column; gap: 0.15rem; }
+.game-card-meta, .game-card-result { opacity: 0.7; font-size: 0.8rem; margin-top: 0.4rem; }
+
+.challenges ul, .actor-games ul, .move-list, .commentary ul, .verify ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.challenges li { padding: 0.3rem 0; display: flex; gap: 0.75rem; flex-wrap: wrap; }
+
+/* Game page */
+.game-layout {
+  display: grid;
+  grid-template-columns: minmax(16rem, 30rem) minmax(12rem, 1fr) minmax(14rem, 24rem);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.board { width: 100%; aspect-ratio: 1; }
+.cg-wrap { width: 100%; height: 100%; }
+
+.clocks { display: flex; gap: 1rem; margin-top: 0.5rem; }
+.clock { display: flex; justify-content: space-between; gap: 0.5rem; flex: 1; }
+
+.move-list li {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.2rem 0.3rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.move-list .ply { width: 2rem; opacity: 0.55; }
+
+.banner {
+  padding: 0.5rem 0.9rem;
+  border-radius: 6px;
+  margin: 0.5rem 0;
+}
+.banner-draw { background: rgba(255, 200, 80, 0.18); }
+.banner-finished { background: rgba(120, 200, 140, 0.18); }
+
+/* Commentary panel — §12 indicators */
+.commentary-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.45rem 0.5rem;
+  border-left: 3px solid rgba(255, 255, 255, 0.2);
+  margin-bottom: 0.4rem;
+}
+.commentary-item.ind-bubble { border-left-color: #7ab8ff; }
+.commentary-item.ind-clock { border-left-color: #ffc850; }
+.commentary-item.ind-lock { border-left-color: #c78aff; }
+.commentary-item.ind-never { border-left-color: rgba(255, 255, 255, 0.15); opacity: 0.6; }
+.commentary-text { flex-basis: 100%; margin: 0.15rem 0 0; }
+
+/* Revealed items animate in (spec §12). */
+.commentary-item.flash-in {
+  animation: commentary-in 600ms ease-out;
+}
+@keyframes commentary-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .commentary-item.flash-in { animation: none; }
+}
+
+.badge {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(120, 200, 140, 0.2);
+  border: 1px solid rgba(120, 200, 140, 0.4);
+}
+.badge.warn { background: rgba(255, 140, 90, 0.2); border-color: rgba(255, 140, 90, 0.4); }
+
+.verify { margin-top: 1.5rem; }
+.verify li { display: flex; gap: 0.75rem; padding: 0.2rem 0; align-items: baseline; }
+.verify [data-verdict='match'] [data-testid='verify-verdict'] { color: #7ad68a; }
+.verify [data-verdict='mismatch'] [data-testid='verify-verdict'] { color: #ff8f8f; }
+
+.policies blockquote {
+  border-left: 3px solid rgba(255, 255, 255, 0.3);
+  margin: 0.5rem 0;
+  padding: 0.25rem 0.9rem;
+}
+.lexicons ul { columns: 2; }
+
+@media (max-width: 60rem) {
+  .game-layout { grid-template-columns: 1fr; }
+  .lexicons ul { columns: 1; }
 }
 
 @media (prefers-color-scheme: light) {
@@ -33,4 +169,12 @@ code {
     color: #1b1b23;
     background-color: #f7f7fa;
   }
+  .nav { border-bottom-color: rgba(0, 0, 0, 0.1); }
+  code, .mono { background: rgba(0, 0, 0, 0.07); }
+  .game-card { border-color: rgba(0, 0, 0, 0.15); }
+  .game-card:hover { border-color: rgba(0, 0, 0, 0.45); }
+  .move-list li { border-bottom-color: rgba(0, 0, 0, 0.07); }
+  .commentary-item { border-left-color: rgba(0, 0, 0, 0.2); }
+  .commentary-item.ind-never { border-left-color: rgba(0, 0, 0, 0.12); }
+  .policies blockquote { border-left-color: rgba(0, 0, 0, 0.3); }
 }

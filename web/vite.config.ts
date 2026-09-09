@@ -1,16 +1,12 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  server: {
-    proxy: {
-      // Dev convenience: forward XRPC and WS calls to the local AppView.
-      '/xrpc': {
-        target: 'http://localhost:8080',
-        ws: true,
-      },
-    },
+  test: {
+    environment: 'jsdom',
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    globals: true,
+    setupFiles: ['src/test-setup.ts'],
   },
 })
