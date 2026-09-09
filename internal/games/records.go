@@ -12,6 +12,7 @@ import (
 	"github.com/haileyok/botplaysbot/internal/engine"
 	"github.com/haileyok/botplaysbot/internal/events"
 	"github.com/haileyok/botplaysbot/internal/gen/playsbot"
+	"github.com/haileyok/botplaysbot/internal/gen/playsbot/comatproto"
 	"github.com/haileyok/botplaysbot/internal/repo"
 )
 
@@ -188,6 +189,28 @@ func (m *Manager) gameRecord(g *repo.Game, players []GamePlayer, result *events.
 				Plies:   int64(d.Plies),
 				Seconds: int64(d.Seconds),
 			})
+		}
+	}
+	// Challenge strongRef (spec §9a.5) — set only for repo-backed challenges.
+	if g.ChallengeURI != nil {
+		rec.Challenge = gt.Some(comatproto.RepoStrongRef{
+			LexiconTypeID: "com.atproto.repo.strongRef",
+			URI:           *g.ChallengeURI,
+			CID:           deref(g.ChallengeCID),
+		})
+	}
+	// Matchmaking provenance (spec §9a.5) — set only for pool-paired games.
+	if len(g.Matchmaking) > 0 {
+		var mm MatchmakingInfo
+		if err := json.Unmarshal(g.Matchmaking, &mm); err == nil {
+			bm := playsbot.BotGame_Matchmaking{LexiconTypeID: "bot.plays.bot.game#matchmaking", Pool: mm.Pool}
+			if mm.WaitMs != 0 {
+				bm.WaitMs = gt.Some(mm.WaitMs)
+			}
+			if mm.RatingGap != 0 {
+				bm.RatingGap = gt.Some(mm.RatingGap)
+			}
+			rec.Matchmaking = gt.Some(bm)
 		}
 	}
 	if g.StartedAt != nil {

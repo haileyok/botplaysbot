@@ -83,6 +83,18 @@ type Tunables struct {
 	// SweeperInterval is the clock sweeper cadence: how often the AppView
 	// looks for active games past their deadline (§7).
 	SweeperInterval time.Duration
+	// ChallengeTTL is the default challenge expiry (§4.8: 10 minutes;
+	// a caller-requested expiry is capped at 24h).
+	ChallengeTTL time.Duration
+	// ChallengeMaxTTL is the ceiling on a caller-requested challenge TTL.
+	ChallengeMaxTTL time.Duration
+	// NoShowSuspend is how long a DID is barred from the seek pool after
+	// NoShowThreshold consecutive ply-1/ply-2 timeouts in matched games (§9a.3).
+	NoShowSuspend time.Duration
+	// DistinctOperators blocks pairing two bots that share a verified
+	// operator when both profiles are indexed (§9a.3; a no-op until the
+	// Phase E profile indexer runs).
+	DistinctOperators bool
 }
 
 // Config is the process configuration.
@@ -216,6 +228,18 @@ func LoadFromEnv(get func(string) string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	challengeTTL, err := durEnv(get, "PLAYSBOT_CHALLENGE_TTL", 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	noShowSuspend, err := durEnv(get, "PLAYSBOT_NO_SHOW_SUSPEND", time.Hour)
+	if err != nil {
+		return nil, err
+	}
+	distinctOperators, err := boolEnv(get, "PLAYSBOT_DISTINCT_OPERATORS", true)
+	if err != nil {
+		return nil, err
+	}
 
 	t := Tunables{
 		PerMoveSeconds:      perMoveSeconds,
@@ -234,6 +258,10 @@ func LoadFromEnv(get func(string) string) (*Config, error) {
 		},
 		MaxConcurrentGames: maxConcurrentGames,
 		SweeperInterval:    sweeperInterval,
+		ChallengeTTL:       challengeTTL,
+		ChallengeMaxTTL:    24 * time.Hour,
+		NoShowSuspend:      noShowSuspend,
+		DistinctOperators:  distinctOperators,
 	}
 	if t.PerMoveSeconds <= 0 {
 		return nil, fmt.Errorf("config: PLAYSBOT_PER_MOVE_SECONDS must be > 0")
@@ -254,9 +282,29 @@ func LoadFromEnv(get func(string) string) (*Config, error) {
 	if t.MaxConcurrentGames <= 0 {
 		return nil, fmt.Errorf("config: PLAYSBOT_MAX_CONCURRENT_GAMES must be > 0")
 	}
+	if t.ChallengeTTL <= 0 || t.ChallengeMaxTTL < t.ChallengeTTL {
+		return nil, fmt.Errorf("config: invalid challenge TTL tunables")
+	}
+	if t.NoShowSuspend <= 0 {
+		return nil, fmt.Errorf("config: PLAYSBOT_NO_SHOW_SUSPEND must be > 0")
+	}
 	cfg.Tunables = t
 
 	return cfg, nil
+}
+
+// boolEnv parses an optional boolean variable. Empty uses def; a malformed
+// value is an error rather than a silent fallback.
+func boolEnv(get func(string) string, name string, def bool) (bool, error) {
+	s := get(name)
+	if s == "" {
+		return def, nil
+	}
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return false, fmt.Errorf("config: %s: %w", name, err)
+	}
+	return v, nil
 }
 
 // intEnv parses an optional integer variable. Empty uses def; a malformed

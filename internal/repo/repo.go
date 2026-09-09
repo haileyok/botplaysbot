@@ -30,26 +30,32 @@ func mapNotFound(err error) error {
 // per-table repositories.
 type Pool struct {
 	*pgxpool.Pool
-	Games      *GamesRepo
-	Moves      *MovesRepo
-	Challenges *ChallengesRepo
-	Seeks      *SeeksRepo
-	Flags      *FlagsRepo
-	Commentary *CommentaryRepo
-	Actors     *ActorsRepo
+	Games       *GamesRepo
+	Moves       *MovesRepo
+	Challenges  *ChallengesRepo
+	Seeks       *SeeksRepo
+	Pairings    *PairingsRepo
+	Seats       *SeatHistoryRepo
+	Suspensions *SuspensionsRepo
+	Flags       *FlagsRepo
+	Commentary  *CommentaryRepo
+	Actors      *ActorsRepo
 }
 
 // New wraps a pgx pool.
 func New(pool *pgxpool.Pool) *Pool {
 	return &Pool{
-		Pool:       pool,
-		Games:      NewGamesRepo(pool),
-		Moves:      NewMovesRepo(pool),
-		Challenges: NewChallengesRepo(pool),
-		Seeks:      NewSeeksRepo(pool),
-		Flags:      NewFlagsRepo(pool),
-		Commentary: NewCommentaryRepo(pool),
-		Actors:     NewActorsRepo(pool),
+		Pool:        pool,
+		Games:       NewGamesRepo(pool),
+		Moves:       NewMovesRepo(pool),
+		Challenges:  NewChallengesRepo(pool),
+		Seeks:       NewSeeksRepo(pool),
+		Pairings:    NewPairingsRepo(pool),
+		Seats:       NewSeatHistoryRepo(pool),
+		Suspensions: NewSuspensionsRepo(pool),
+		Flags:       NewFlagsRepo(pool),
+		Commentary:  NewCommentaryRepo(pool),
+		Actors:      NewActorsRepo(pool),
 	}
 }
 
@@ -84,18 +90,26 @@ type Game struct {
 	// (spec §5.6: expired when the offerer's next move is accepted).
 	DrawOfferDID *string
 	DrawOfferPly *int
+	// Matchmaking carries the seek-pool provenance {pool, waitMs, ratingGap}
+	// for matched games (spec §9a.5); nil for challenge-created games.
+	Matchmaking json.RawMessage
+	// ChallengeURI/ChallengeCID are the challenge strongRef for games
+	// created from a repo-backed challenge (spec §9a.5); nil otherwise.
+	ChallengeURI *string
+	ChallengeCID *string
 }
 
 const gameColumns = `uri, cid, game_type, variant, status, players, time_control,
 	commentary_delay, seed, state, ply, turn_did, result, created_at, started_at,
-	finished_at, clock_anchor, draw_offer_did, draw_offer_ply`
+	finished_at, clock_anchor, draw_offer_did, draw_offer_ply, matchmaking,
+	challenge_uri, challenge_cid`
 
 func scanGame(row pgx.Row) (*Game, error) {
 	var g Game
 	err := row.Scan(&g.URI, &g.CID, &g.GameType, &g.Variant, &g.Status, &g.Players,
 		&g.TimeControl, &g.CommentaryDelay, &g.Seed, &g.State, &g.Ply, &g.TurnDID,
 		&g.Result, &g.CreatedAt, &g.StartedAt, &g.FinishedAt, &g.ClockAnchor,
-		&g.DrawOfferDID, &g.DrawOfferPly)
+		&g.DrawOfferDID, &g.DrawOfferPly, &g.Matchmaking, &g.ChallengeURI, &g.ChallengeCID)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -112,11 +126,11 @@ func NewGamesRepo(pool *pgxpool.Pool) *GamesRepo { return &GamesRepo{pool} }
 func (r *GamesRepo) Insert(ctx context.Context, g *Game) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO games (`+gameColumns+`)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
 		g.URI, g.CID, g.GameType, g.Variant, g.Status, g.Players, g.TimeControl,
 		g.CommentaryDelay, g.Seed, g.State, g.Ply, g.TurnDID, g.Result,
 		g.CreatedAt, g.StartedAt, g.FinishedAt, g.ClockAnchor,
-		g.DrawOfferDID, g.DrawOfferPly)
+		g.DrawOfferDID, g.DrawOfferPly, g.Matchmaking, g.ChallengeURI, g.ChallengeCID)
 	return err
 }
 
@@ -240,6 +254,16 @@ func (r *GamesRepo) ListExpired(ctx context.Context, now time.Time, limit int) (
 	return out, rows.Err()
 }
 
+// CountActiveByPlayer counts the active games a DID appears in (spec §10
+// concurrent-games cap). Players is the games.players jsonb array.
+func (r *GamesRepo) CountActiveByPlayer(ctx context.Context, did string) (int, error) {
+	var n int
+	err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM games WHERE status = 'active' AND players @> $1::jsonb`,
+		[]byte(`[{"did":"`+did+`"}]`)).Scan(&n)
+	return n, err
+}
+
 // Move mirrors the moves table: one accepted move per (game, ply).
 type Move struct {
 	GameURI          string
@@ -336,18 +360,30 @@ func (r *MovesRepo) ListByGame(ctx context.Context, gameURI string) ([]Move, err
 
 // Challenge mirrors the challenges table (spec §9a.1/9a.2).
 type Challenge struct {
-	ID            string
-	ChallengerDID string
-	OpponentDID   *string
-	GameType      string
-	Variant       *string
-	TimeControl   json.RawMessage
-	Rated         bool
-	Status        string
-	ExpiresAt     *time.Time
-	RepoURI       *string
-	CreatedAt     *time.Time
+	ID              string
+	ChallengerDID   string
+	OpponentDID     *string
+	GameType        string
+	Variant         *string
+	TimeControl     json.RawMessage
+	CommentaryDelay json.RawMessage
+	SeatPreference  string
+	Rated           bool
+	Status          string
+	ExpiresAt       *time.Time
+	RepoURI         *string
+	CreatedAt       *time.Time
 }
+
+// Challenge statuses (spec §9a.1/9a.2 lifecycle).
+const (
+	ChallengeOpen      = "open"
+	ChallengePending   = "pending" // direct challenge awaiting its opponent
+	ChallengeAccepted  = "accepted"
+	ChallengeDeclined  = "declined"
+	ChallengeCancelled = "cancelled"
+	ChallengeExpired   = "expired"
+)
 
 // ChallengesRepo is CRUD for challenges.
 type ChallengesRepo struct{ pool *pgxpool.Pool }
@@ -355,34 +391,64 @@ type ChallengesRepo struct{ pool *pgxpool.Pool }
 // NewChallengesRepo returns a challenges repository.
 func NewChallengesRepo(pool *pgxpool.Pool) *ChallengesRepo { return &ChallengesRepo{pool} }
 
-// Insert stores a new challenge.
-func (r *ChallengesRepo) Insert(ctx context.Context, c *Challenge) error {
-	_, err := r.pool.Exec(ctx,
-		`INSERT INTO challenges (id, challenger_did, opponent_did, game_type, variant,
-		    time_control, rated, status, expires_at, repo_uri, created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())`,
-		c.ID, c.ChallengerDID, c.OpponentDID, c.GameType, c.Variant, c.TimeControl,
-		c.Rated, c.Status, c.ExpiresAt, c.RepoURI)
-	return err
-}
+const challengeColumns = `id, challenger_did, opponent_did, game_type, variant,
+	time_control, commentary_delay, seat_preference, rated, status, expires_at,
+	repo_uri, created_at`
 
-// Get returns the challenge with id.
-func (r *ChallengesRepo) Get(ctx context.Context, id string) (*Challenge, error) {
+func scanChallenge(row pgx.Row) (*Challenge, error) {
 	var c Challenge
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, challenger_did, opponent_did, game_type, variant, time_control,
-		        rated, status, expires_at, repo_uri, created_at
-		 FROM challenges WHERE id=$1`, id).
-		Scan(&c.ID, &c.ChallengerDID, &c.OpponentDID, &c.GameType, &c.Variant, &c.TimeControl,
-			&c.Rated, &c.Status, &c.ExpiresAt, &c.RepoURI, &c.CreatedAt)
+	err := row.Scan(&c.ID, &c.ChallengerDID, &c.OpponentDID, &c.GameType, &c.Variant,
+		&c.TimeControl, &c.CommentaryDelay, &c.SeatPreference, &c.Rated, &c.Status,
+		&c.ExpiresAt, &c.RepoURI, &c.CreatedAt)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
 	return &c, nil
 }
 
-// UpdateStatus moves a challenge through its lifecycle
-// (open/pending/accepted/declined/cancelled/expired).
+// Insert stores a new challenge.
+func (r *ChallengesRepo) Insert(ctx context.Context, c *Challenge) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO challenges (id, challenger_did, opponent_did, game_type, variant,
+		    time_control, commentary_delay, seat_preference, rated, status, expires_at,
+		    repo_uri, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now())`,
+		c.ID, c.ChallengerDID, c.OpponentDID, c.GameType, c.Variant, c.TimeControl,
+		c.CommentaryDelay, c.SeatPreference, c.Rated, c.Status, c.ExpiresAt, c.RepoURI)
+	return err
+}
+
+// Get returns the challenge with id.
+func (r *ChallengesRepo) Get(ctx context.Context, id string) (*Challenge, error) {
+	return scanChallenge(r.pool.QueryRow(ctx,
+		`SELECT `+challengeColumns+` FROM challenges WHERE id=$1`, id))
+}
+
+// CountOpenBy counts a challenger's still-live open challenges for one game
+// type (spec §10: at most one open challenge per DID per game type).
+func (r *ChallengesRepo) CountOpenBy(ctx context.Context, challengerDID, gameType string, now time.Time) (int, error) {
+	var n int
+	err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM challenges
+		 WHERE challenger_did=$1 AND game_type=$2 AND opponent_did IS NULL
+		   AND status=$3 AND (expires_at IS NULL OR expires_at > $4)`,
+		challengerDID, gameType, ChallengeOpen, now).Scan(&n)
+	return n, err
+}
+
+// TransitionStatus moves a challenge from any of the from-statuses to the
+// target status, reporting whether the row was updated. The conditional
+// update is the accept race arbiter: exactly one concurrent acceptor wins.
+func (r *ChallengesRepo) TransitionStatus(ctx context.Context, id string, from []string, to string) (bool, error) {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE challenges SET status=$3 WHERE id=$1 AND status = ANY($2)`, id, from, to)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// UpdateStatus moves a challenge through its lifecycle unconditionally.
 func (r *ChallengesRepo) UpdateStatus(ctx context.Context, id, status string) error {
 	tag, err := r.pool.Exec(ctx,
 		`UPDATE challenges SET status=$2 WHERE id=$1`, id, status)
@@ -406,6 +472,78 @@ func (r *ChallengesRepo) SetOpponent(ctx context.Context, id string, opponentDID
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ChallengesFilter selects rows for List.
+type ChallengesFilter struct {
+	GameType string // empty = any
+	Opponent string // DID; empty = any
+	Open     *bool  // nil = any; true = open only, false = non-open only
+	BeforeID string // cursor: id < BeforeID (ids are k-ordered TIDs)
+	Limit    int
+}
+
+// List returns live (open or pending, unexpired) challenges matching the
+// filter, newest first (spec §5.5: listChallenges excludes expired).
+func (r *ChallengesRepo) List(ctx context.Context, f ChallengesFilter, now time.Time) ([]*Challenge, error) {
+	if f.Limit <= 0 {
+		f.Limit = 50
+	}
+	sql := `SELECT ` + challengeColumns + ` FROM challenges
+		WHERE status IN ($1,$2) AND (expires_at IS NULL OR expires_at > $3)`
+	args := []any{ChallengeOpen, ChallengePending, now}
+	if f.GameType != "" {
+		args = append(args, f.GameType)
+		sql += fmt.Sprintf(` AND game_type = $%d`, len(args))
+	}
+	if f.Opponent != "" {
+		args = append(args, f.Opponent)
+		sql += fmt.Sprintf(` AND opponent_did = $%d`, len(args))
+	}
+	if f.Open != nil {
+		if *f.Open {
+			args = append(args, ChallengeOpen)
+			sql += fmt.Sprintf(` AND status = $%d`, len(args))
+		} else {
+			args = append(args, ChallengeOpen)
+			sql += fmt.Sprintf(` AND status <> $%d`, len(args))
+		}
+	}
+	if f.BeforeID != "" {
+		args = append(args, f.BeforeID)
+		sql += fmt.Sprintf(` AND id < $%d`, len(args))
+	}
+	args = append(args, f.Limit)
+	sql += fmt.Sprintf(` ORDER BY id DESC LIMIT $%d`, len(args))
+
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*Challenge
+	for rows.Next() {
+		c, err := scanChallenge(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ExpireDue flips every live challenge past its expiry to expired, returning
+// how many rows changed. Rides the pairing loop (Phase D).
+func (r *ChallengesRepo) ExpireDue(ctx context.Context, now time.Time) (int64, error) {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE challenges SET status=$2
+		 WHERE status IN ($3,$4) AND expires_at IS NOT NULL AND expires_at <= $1`,
+		now, ChallengeExpired, ChallengeOpen, ChallengePending)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // Seek mirrors the seeks table (spec §9a.3).
@@ -503,6 +641,160 @@ func (r *SeeksRepo) ListActive(ctx context.Context, pool string) ([]Seek, error)
 		out = append(out, *s)
 	}
 	return out, rows.Err()
+}
+
+// ListAllActive returns every active seek across all pools (the pairing loop
+// groups by pool itself).
+func (r *SeeksRepo) ListAllActive(ctx context.Context) ([]Seek, error) {
+	rows, err := r.pool.Query(ctx, seekSelect+` WHERE active ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Seek
+	for rows.Next() {
+		s, err := scanSeek(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
+// ListByDID returns a DID's seeks, newest first, optionally active-only.
+func (r *SeeksRepo) ListByDID(ctx context.Context, did string, activeOnly bool) ([]Seek, error) {
+	sql := seekSelect + ` WHERE did=$1`
+	if activeOnly {
+		sql += ` AND active`
+	}
+	sql += ` ORDER BY created_at DESC`
+	rows, err := r.pool.Query(ctx, sql, did)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Seek
+	for rows.Next() {
+		s, err := scanSeek(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
+// CountActiveByDID counts a DID's active seeks (a duplicate-seek guard).
+func (r *SeeksRepo) CountActiveByDID(ctx context.Context, did string) (int, error) {
+	var n int
+	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM seeks WHERE did=$1 AND active`, did).Scan(&n)
+	return n, err
+}
+
+// ---------------------------------------------------------------------------
+// Pairing history (spec §9a.3 repeat cooldown) and seat history
+// (seat alternation)
+
+// PairingsRepo records matchmade pairings for the repeat-cooldown check.
+type PairingsRepo struct{ pool *pgxpool.Pool }
+
+// NewPairingsRepo returns a pairing-history repository.
+func NewPairingsRepo(pool *pgxpool.Pool) *PairingsRepo { return &PairingsRepo{pool} }
+
+// Add records one matched pairing. didA/didB are stored in sorted order so
+// lookups need not consider both orientations.
+func (r *PairingsRepo) Add(ctx context.Context, didA, didB, gameType, gameURI string) error {
+	if didB < didA {
+		didA, didB = didB, didA
+	}
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO pairing_history (did_a, did_b, game_type, game_uri)
+		 VALUES ($1,$2,$3,$4)`, didA, didB, gameType, gameURI)
+	return err
+}
+
+// RecentPairs returns the unordered DID pairs that played the game type
+// within the window ending at now (the repeat-cooldown set, spec §9a.3).
+// Each pair is [didA, didB] in sorted order.
+func (r *PairingsRepo) RecentPairs(ctx context.Context, gameType string, since time.Time) ([][2]string, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT DISTINCT did_a, did_b FROM pairing_history
+		 WHERE game_type=$1 AND created_at > $2`, gameType, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out [][2]string
+	for rows.Next() {
+		var a, b string
+		if err := rows.Scan(&a, &b); err != nil {
+			return nil, err
+		}
+		out = append(out, [2]string{a, b})
+	}
+	return out, rows.Err()
+}
+
+// SeatHistoryRepo tracks each agent's most recent seat per game type so
+// matchmaking can alternate first move (spec §9a.3 step 5).
+type SeatHistoryRepo struct{ pool *pgxpool.Pool }
+
+// NewSeatHistoryRepo returns a seat-history repository.
+func NewSeatHistoryRepo(pool *pgxpool.Pool) *SeatHistoryRepo { return &SeatHistoryRepo{pool} }
+
+// LastSeat returns the DID's most recent seat for the game type; ok is false
+// when the DID has no history yet.
+func (r *SeatHistoryRepo) LastSeat(ctx context.Context, did, gameType string) (seat string, ok bool, err error) {
+	err = r.pool.QueryRow(ctx,
+		`SELECT last_seat FROM seat_history WHERE did=$1 AND game_type=$2`, did, gameType).
+		Scan(&seat)
+	if err != nil {
+		return "", false, mapNotFound(err)
+	}
+	return seat, true, nil
+}
+
+// SetLastSeat persists the seat a DID just played, with the update time.
+func (r *SeatHistoryRepo) SetLastSeat(ctx context.Context, did, gameType, seat string) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO seat_history (did, game_type, last_seat, updated_at)
+		 VALUES ($1,$2,$3,now())
+		 ON CONFLICT (did, game_type) DO UPDATE SET last_seat=$3, updated_at=now()`,
+		did, gameType, seat)
+	return err
+}
+
+// SuspensionsRepo tracks DIDs barred from the seek pool (spec §9a.3 no-show
+// suspension). One row per DID; a new suspension overwrites an old one.
+type SuspensionsRepo struct{ pool *pgxpool.Pool }
+
+// NewSuspensionsRepo returns a suspensions repository.
+func NewSuspensionsRepo(pool *pgxpool.Pool) *SuspensionsRepo { return &SuspensionsRepo{pool} }
+
+// Suspend bars the DID from the seek pool until until.
+func (r *SuspensionsRepo) Suspend(ctx context.Context, did string, until time.Time, reason string) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO seek_suspensions (did, until, reason, updated_at)
+		 VALUES ($1,$2,$3,now())
+		 ON CONFLICT (did) DO UPDATE SET until=$2, reason=$3, updated_at=now()`,
+		did, until, reason)
+	return err
+}
+
+// ActiveUntil reports the DID's active suspension end, if any.
+func (r *SuspensionsRepo) ActiveUntil(ctx context.Context, did string, now time.Time) (*time.Time, error) {
+	var until *time.Time
+	err := r.pool.QueryRow(ctx,
+		`SELECT until FROM seek_suspensions WHERE did=$1 AND until > $2`, did, now).
+		Scan(&until)
+	if err != nil {
+		return nil, mapNotFound(err)
+	}
+	return until, nil
 }
 
 // Flag mirrors the flags table (spec §10).

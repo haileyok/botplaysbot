@@ -67,6 +67,13 @@ func testConfig(t *testing.T, databaseURL string, keyDir string, pdsURL, plcURL,
 		Tunables: config.Tunables{
 			PerMoveSeconds:  300,
 			SweeperInterval: time.Second,
+			// Phase D tunables (spec §9a/§10 defaults; matchmaking tests
+			// tighten intervals in their boot helpers).
+			ChallengeTTL:       10 * time.Minute,
+			ChallengeMaxTTL:    24 * time.Hour,
+			NoShowSuspend:      time.Hour,
+			DistinctOperators:  true,
+			MaxConcurrentGames: 20,
 		},
 	}
 }

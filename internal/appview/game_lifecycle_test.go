@@ -260,9 +260,9 @@ func TestGameFullToCheckmate(t *testing.T) {
 	// Fool's mate: 1. f3 e5 2. g4 Qh4#.
 	var finalBody []byte
 	moves := []struct {
-		token       string
-		from, to    string
-		wantSAN     string
+		token    string
+		from, to string
+		wantSAN  string
 	}{
 		{accessJWT(t, env, white), "f2", "f3", "f3"},
 		{accessJWT(t, env, black), "e7", "e5", "e5"},
@@ -346,9 +346,9 @@ func TestGameFullToCheckmate(t *testing.T) {
 		t.Fatalf("after finish the service repo has %d game records, want the same 1", len(recs))
 	}
 	var finished struct {
-		Status       string `json:"status"`
-		PlyCount     int64  `json:"plyCount"`
-		Result       struct {
+		Status   string `json:"status"`
+		PlyCount int64  `json:"plyCount"`
+		Result   struct {
 			Outcome string `json:"outcome"`
 			Winner  string `json:"winner"`
 			Reason  string `json:"reason"`
@@ -671,8 +671,8 @@ func TestGameRepetitionAutoDraw(t *testing.T) {
 	b := accessJWT(t, env, black)
 
 	plies := []struct {
-		token     string
-		from, to  string
+		token    string
+		from, to string
 	}{
 		{w, "g1", "f3"}, {b, "g8", "f6"},
 		{w, "f3", "g1"}, {b, "f6", "g8"},
@@ -799,4 +799,3 @@ func (e *gameEnv) postJSON(t *testing.T, path string, payload any, token string)
 	defer resp.Body.Close()
 	return resp.StatusCode, readAll(t, resp)
 }
-

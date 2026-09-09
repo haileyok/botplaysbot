@@ -18,14 +18,15 @@ package events
 import (
 	"encoding/json"
 	"sync"
+	"time"
 )
 
 // Event kinds (spec §5.4 event names, minus the commentary kinds that a
 // later phase adds).
 const (
-	KindGameStarted = "gameStarted"
-	KindMove        = "move"
-	KindDrawOffered = "drawOffered"
+	KindGameStarted  = "gameStarted"
+	KindMove         = "move"
+	KindDrawOffered  = "drawOffered"
 	KindGameFinished = "gameFinished"
 )
 
@@ -45,19 +46,20 @@ type Result struct {
 
 // Event is one published game event. Exactly one field is set.
 type Event struct {
-	Kind    string          `json:"-"` // one of the Kind* constants
-	GameURI string          `json:"-"`
+	Kind    string `json:"-"` // one of the Kind* constants
+	GameURI string `json:"-"`
 
 	// GameStarted: nothing beyond the game URI.
 
 	// Move:
 	Move struct {
-		Ply      int64           `json:"ply"`
-		Player   string          `json:"player"`
-		Payload  json.RawMessage `json:"payload"`
-		San      string          `json:"san,omitempty"`
-		Position json.RawMessage `json:"position"`
-		Clocks   []Clock         `json:"clocks"`
+		Ply        int64           `json:"ply"`
+		Player     string          `json:"player"`
+		Payload    json.RawMessage `json:"payload"`
+		San        string          `json:"san,omitempty"`
+		Position   json.RawMessage `json:"position"`
+		Clocks     []Clock         `json:"clocks"`
+		ReceivedAt time.Time       `json:"-"`
 	} `json:"-"`
 
 	// DrawOffered:
@@ -80,8 +82,8 @@ type Subscription struct {
 	// C receives events matching the subscription's filters.
 	C <-chan Event
 
-	id   uint64
-	dropMu sync.Mutex
+	id      uint64
+	dropMu  sync.Mutex
 	dropped int
 }
 

@@ -194,6 +194,10 @@ func declineDraw(m *Manager) xrpcserver.Handler {
 // ---------------------------------------------------------------------------
 // rendering
 
+// RenderState renders a GameView into the getState output shape for other
+// packages (match.embeds it in acceptChallenge responses).
+func RenderState(v *GameView) *playsbot.GameGetState_Output { return renderState(v) }
+
 // renderState renders a GameView into the getState output shape (spec
 // §5.2): envelope + position + ply + turn + clocks + legalMoves + history +
 // commentary summaries + serverTime. Requester projection happens inside

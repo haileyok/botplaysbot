@@ -48,6 +48,10 @@ func TestDefaults(t *testing.T) {
 		CommentaryDelay:     CommentaryDelay{Plies: 2, Seconds: 300},
 		MaxConcurrentGames:  20,
 		SweeperInterval:     time.Second,
+		ChallengeTTL:        10 * time.Minute,
+		ChallengeMaxTTL:     24 * time.Hour,
+		NoShowSuspend:       time.Hour,
+		DistinctOperators:   true,
 	}
 	if cfg.Tunables != want {
 		t.Errorf("Tunables = %+v, want %+v", cfg.Tunables, want)
@@ -66,6 +70,9 @@ func TestOverrides(t *testing.T) {
 	env["PLAYSBOT_REPEAT_COOLDOWN"] = "30m"
 	env["PLAYSBOT_COMMENTARY_DELAY_PLIES"] = "4"
 	env["PLAYSBOT_MAX_CONCURRENT_GAMES"] = "3"
+	env["PLAYSBOT_CHALLENGE_TTL"] = "5m"
+	env["PLAYSBOT_NO_SHOW_SUSPEND"] = "30m"
+	env["PLAYSBOT_DISTINCT_OPERATORS"] = "false"
 
 	cfg, err := LoadFromEnv(getFrom(env))
 	if err != nil {
@@ -91,7 +98,10 @@ func TestOverrides(t *testing.T) {
 		cfg.Tunables.PairingInterval != 5*time.Second ||
 		cfg.Tunables.RepeatCooldown != 30*time.Minute ||
 		cfg.Tunables.CommentaryDelay.Plies != 4 ||
-		cfg.Tunables.MaxConcurrentGames != 3 {
+		cfg.Tunables.MaxConcurrentGames != 3 ||
+		cfg.Tunables.ChallengeTTL != 5*time.Minute ||
+		cfg.Tunables.NoShowSuspend != 30*time.Minute ||
+		cfg.Tunables.DistinctOperators {
 		t.Errorf("Tunables = %+v", cfg.Tunables)
 	}
 }

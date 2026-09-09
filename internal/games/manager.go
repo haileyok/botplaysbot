@@ -117,6 +117,29 @@ type TokenMinter interface {
 	Mint(playerDID, gameURI string, ply int64, payload json.RawMessage, receivedAt time.Time) (string, error)
 }
 
+// FinishInfo describes one game just finished, for observers registered via
+// SetFinishHook (Phase D: no-show detection rides this; Phase E: ratings).
+type FinishInfo struct {
+	GameURI  string
+	GameType string
+	Variant  string
+	Players  []GamePlayer
+	// Ply is the number of accepted moves when the game ended.
+	Ply int
+	// TurnDID is the player who was on the move at the end (for a timeout,
+	// the player who lost on time).
+	TurnDID string
+	// Matched reports whether the game came from the seek pool (it carries
+	// matchmaking provenance, spec §9a.5).
+	Matched bool
+	// Result is the terminal result.
+	Result *events.Result
+}
+
+// FinishHook observes finished games. It runs inline with the finish path,
+// so it must be fast and must not call back into the Manager.
+type FinishHook func(FinishInfo)
+
 type ed25519Minter struct {
 	serviceDID string
 	priv       ed25519.PrivateKey
@@ -148,6 +171,10 @@ type Manager struct {
 	minter  TokenMinter
 	writer  *servicerepo.Writer
 	bus     *events.Bus
+
+	// finishHook observes game finishes (set via SetFinishHook before any
+	// game can finish; read without a lock because registration is boot-time).
+	finishHook FinishHook
 
 	now func() time.Time
 
@@ -200,6 +227,32 @@ func NewManager(cfg *config.Config, pool *pgxpool.Pool, repos *repo.Pool, engine
 // Bus exposes the event bus (Phase D attaches WS subscriptions).
 func (m *Manager) Bus() *events.Bus { return m.bus }
 
+// SetFinishHook registers an observer for finished games (Phase D no-show
+// detection; Phase E ratings). Register once at boot, before games can
+// finish; the hook runs inline with finish paths (submit-expiry, sweeper,
+// resign, draw) and must not call back into the Manager.
+func (m *Manager) SetFinishHook(h FinishHook) { m.finishHook = h }
+
+// SupportsGameType reports whether an engine is registered for gameType
+// (matchmaking validates seeks and challenges against it).
+func (m *Manager) SupportsGameType(gameType string) bool {
+	_, err := m.engines.Get(gameType)
+	return err == nil
+}
+
+// SeatOrder returns the engine's seats in turn order for the variant:
+// SeatOrder[0] is the first mover's seat.
+func (m *Manager) SeatOrder(gameType, variant string) ([]string, error) {
+	eng, err := m.engines.Get(gameType)
+	if err != nil {
+		return nil, err
+	}
+	if variant == "" {
+		variant = engine.ChessVariantStandard
+	}
+	return eng.Seats(variant)
+}
+
 // Close stops the sweeper, if started.
 func (m *Manager) Close() {
 	if m.sweepStop != nil {
@@ -212,8 +265,8 @@ func (m *Manager) Close() {
 // ---------------------------------------------------------------------------
 // Game creation
 
-// CreateParams describes a game to create. Challenge acceptance (Phase D)
-// and matchmaking (Phase D) both land here.
+// CreateParams describes a game to create. Challenge acceptance and
+// matchmaking (Phase D) both land here.
 type CreateParams struct {
 	GameType        string
 	Variant         string
@@ -224,6 +277,31 @@ type CreateParams struct {
 	// StartedAt is the clock start: the receipt time of the event that
 	// started the game (spec §7). The first mover's deadline derives from it.
 	StartedAt time.Time
+	// Challenge is the challenge strongRef carried on the game record when
+	// the game came from a repo-backed challenge (spec §9a.5). XRPC-created
+	// challenges have no indexed record (the Phase E indexer will index
+	// bot.plays.bot.game.challenge), so challenge-acceptance passes nil and
+	// the record carries no strongRef until a future backfill.
+	Challenge *ChallengeRef
+	// Matchmaking carries the seek-pool provenance written onto the record
+	// for matchmade games (spec §9a.5). Nil for challenge/direct games.
+	Matchmaking *MatchmakingInfo
+}
+
+// ChallengeRef is the com.atproto.repo.strongRef for the challenge record a
+// game was created from.
+type ChallengeRef struct {
+	URI string
+	CID string
+}
+
+// MatchmakingInfo is the game record's matchmaking object (spec §9a.5):
+// which pool paired the game, how long the longer-waiting side waited, and
+// the rating gap between the players.
+type MatchmakingInfo struct {
+	Pool      string
+	WaitMs    int64
+	RatingGap int64
 }
 
 // PlayerSpec pairs a DID with a seat.
@@ -311,6 +389,13 @@ func (m *Manager) CreateGame(ctx context.Context, p CreateParams) (*CreatedGame,
 	if err != nil {
 		return nil, fmt.Errorf("games: marshal players: %w", err)
 	}
+	var mmJSON json.RawMessage
+	if p.Matchmaking != nil {
+		mmJSON, err = json.Marshal(p.Matchmaking)
+		if err != nil {
+			return nil, fmt.Errorf("games: marshal matchmaking: %w", err)
+		}
+	}
 
 	// Mint the record key so the game URI is known before the PDS write.
 	rkey := tid.Next().String()
@@ -331,6 +416,11 @@ func (m *Manager) CreateGame(ctx context.Context, p CreateParams) (*CreatedGame,
 		CreatedAt:       &now,
 		StartedAt:       &p.StartedAt,
 		ClockAnchor:     &p.StartedAt,
+		Matchmaking:     mmJSON,
+	}
+	if p.Challenge != nil {
+		ref := *p.Challenge
+		row.ChallengeURI, row.ChallengeCID = &ref.URI, &ref.CID
 	}
 
 	// Write the game record to the service repo. An inert service account is
@@ -607,6 +697,7 @@ func (m *Manager) SubmitMove(ctx context.Context, p SubmitMoveParams) (*Acceptan
 	ev.Move.San = san
 	ev.Move.Position = pos
 	ev.Move.Clocks = []events.Clock{clockNext}
+	ev.Move.ReceivedAt = p.ReceivedAt
 	m.bus.Publish(ev)
 
 	if result != nil {
@@ -667,8 +758,8 @@ func (m *Manager) finishTimeout(ctx context.Context, g *repo.Game, st engine.Sta
 
 // afterFinish performs the post-commit side effects of a game ending: the
 // service-repo record update (status finished + result + finalPosition,
-// spec §2.2 step 7), the reveal-all hook (Phase F), and the #gameFinished
-// event.
+// spec §2.2 step 7), the reveal-all hook (Phase F), the finish observers
+// (Phase D no-show detection), and the #gameFinished event.
 func (m *Manager) afterFinish(ctx context.Context, g *repo.Game, st engine.State, result *events.Result) {
 	var finalPos engine.Position
 	if eng, err := m.engines.Get(g.GameType); err == nil && st != nil {
@@ -681,6 +772,23 @@ func (m *Manager) afterFinish(ctx context.Context, g *repo.Game, st engine.State
 		}
 	}
 	m.revealAll(ctx, g.URI)
+	if m.finishHook != nil {
+		players, err := decodePlayers(g.Players)
+		if err == nil {
+			m.finishHook(FinishInfo{
+				GameURI:  g.URI,
+				GameType: g.GameType,
+				Variant:  deref(g.Variant),
+				Players:  players,
+				Ply:      g.Ply,
+				TurnDID:  deref(g.TurnDID),
+				Matched:  len(g.Matchmaking) > 0,
+				Result:   result,
+			})
+		} else {
+			m.logger.Error("games: decode players for finish hook", "game", g.URI, "err", err)
+		}
+	}
 	m.bus.Publish(events.Event{Kind: events.KindGameFinished, GameURI: g.URI, Result: result})
 }
 

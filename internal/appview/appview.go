@@ -11,13 +11,16 @@ package appview
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jcalabro/atmos/xrpc"
 	"github.com/jcalabro/atmos/xrpcserver"
 
 	"github.com/haileyok/botplaysbot/internal/auth"
@@ -26,6 +29,7 @@ import (
 	"github.com/haileyok/botplaysbot/internal/engine"
 	"github.com/haileyok/botplaysbot/internal/games"
 	"github.com/haileyok/botplaysbot/internal/keys"
+	"github.com/haileyok/botplaysbot/internal/match"
 	"github.com/haileyok/botplaysbot/internal/repo"
 	"github.com/haileyok/botplaysbot/internal/servicerepo"
 )
@@ -50,6 +54,7 @@ type AppView struct {
 
 	engines engine.Registry
 	games   *games.Manager
+	matcher *match.Matcher
 
 	xrpc *xrpcserver.Server
 	mux  *http.ServeMux
@@ -144,17 +149,70 @@ func New(ctx context.Context, cfg *config.Config, opts ...Option) (*AppView, err
 		logger.With("component", "games"))
 	av.xrpc = &xrpcserver.Server{}
 	games.Register(av.xrpc, av.auth, av.games)
-	av.games.StartSweeper(cfg.Tunables.SweeperInterval)
+	games.RegisterSubscriptions(av.xrpc, av.games)
 
-	// 7. HTTP mux.
+	// 6b. Matchmaking (Phase D): challenges, seek pool + pairing loop,
+	// subscriptions. The matcher observes finished games for no-show
+	// detection and registers its own endpoints.
+	av.matcher = match.NewMatcher(cfg, av.pool, av.repos, av.games,
+		match.ProvisionalRatingSource{}, logger.With("component", "match"))
+	av.games.SetFinishHook(av.matcher.OnFinish)
+	match.Register(av.xrpc, av.auth, av.matcher)
+	if err := match.RegisterSubscription(av.xrpc, av.matcher); err != nil {
+		av.auth.Close()
+		av.games.Close()
+		av.closePool()
+		return nil, fmt.Errorf("appview: register match.subscribe: %w", err)
+	}
+	av.games.StartSweeper(cfg.Tunables.SweeperInterval)
+	av.matcher.StartPairing(cfg.Tunables.PairingInterval)
+
+	// 7. HTTP mux. The xrpc mount is wrapped so the authenticated
+	// subscription endpoint (match.subscribe) gets its bearer token
+	// verified — and its identity injected into the request context —
+	// before atmos upgrades the connection (the subscription handler
+	// itself only sees the negotiated stream, not the request).
 	av.mux = http.NewServeMux()
 	av.mux.HandleFunc("GET /healthz", av.handleHealthz)
 	av.mux.Handle("GET /.well-known/plays-bot/escrow-keys.json", av.handleEscrowKeys())
 	av.mux.Handle("GET /.well-known/plays-bot/service.json", av.handleServiceDoc())
-	av.mux.Handle("/xrpc/", av.xrpc)
+	av.mux.Handle("/xrpc/", av.authRequiredSubscriptions(av.xrpc))
 	av.mux.Handle("/", webHandler())
 
 	return av, nil
+}
+
+// authRequiredSubscriptions verifies the bearer token for subscription
+// endpoints that require auth before delegating to the xrpc server, so an
+// unauthenticated upgrade is rejected with a proper XRPC 401 envelope
+// rather than a post-upgrade stream close.
+func (a *AppView) authRequiredSubscriptions(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/xrpc/"+match.NSIDMatchSubscribe {
+			const prefix = "Bearer "
+			h := r.Header.Get("Authorization")
+			if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+				writeXRPCError(w, http.StatusUnauthorized, "AuthRequired", "authentication required")
+				return
+			}
+			id, err := a.auth.Verify(r.Context(), strings.TrimSpace(h[len(prefix):]))
+			if err != nil {
+				writeXRPCError(w, http.StatusUnauthorized, "InvalidToken", "invalid access token")
+				return
+			}
+			r = r.WithContext(auth.WithIdentity(r.Context(), id))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// writeXRPCError writes the standard XRPC error envelope (mirrors the
+// atmos xrpcserver's writeError shape).
+func writeXRPCError(w http.ResponseWriter, status int, name, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	body, _ := json.Marshal(xrpc.Error{Name: name, Message: message})
+	_, _ = w.Write(body)
 }
 
 // RegisterQuery registers a query (GET) endpoint, wrapped at the given auth
@@ -173,6 +231,10 @@ func (a *AppView) RegisterProcedure(nsid string, mode auth.Mode, h xrpcserver.Ha
 // Games exposes the game manager (Phase D challenge acceptance and the WS
 // subscription endpoint attach through it).
 func (a *AppView) Games() *games.Manager { return a.games }
+
+// Matcher exposes the matchmaking manager (tests drive pairing passes and
+// inspect the notification hub through it).
+func (a *AppView) Matcher() *match.Matcher { return a.matcher }
 
 // Auth exposes the verifier (tests use it to seed cache state).
 func (a *AppView) Auth() *auth.Verifier { return a.auth }
@@ -231,8 +293,12 @@ func (a *AppView) Start(ctx context.Context) error {
 	return nil
 }
 
-// Close releases resources (auth janitor, game sweeper, pool when owned).
+// Close releases resources (auth janitor, game sweeper, pairing loop,
+// pool when owned).
 func (a *AppView) Close() {
+	if a.matcher != nil {
+		a.matcher.Close()
+	}
 	if a.games != nil {
 		a.games.Close()
 	}
