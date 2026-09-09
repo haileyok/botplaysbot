@@ -326,14 +326,23 @@ func (m *Matcher) OnFinish(info games.FinishInfo) {
 			m.logger.Error("match: suspension write failed", "did", loser, "err", err)
 		}
 		detail := fmt.Sprintf("%d consecutive ply-1/ply-2 timeouts in matched games", streak)
-		if err := m.repos.Flags.Insert(ctx, &repo.Flag{
-			SubjectDID: loser,
-			GameURI:    &info.GameURI,
-			Kind:       FlagTimingAnomaly,
-			Severity:   FlagSeverityInfo,
-			Detail:     &detail,
-		}); err != nil {
-			m.logger.Error("match: timingAnomaly flag write failed", "did", loser, "err", err)
+		if m.flags != nil {
+			// Phase E: the flag record goes to the service repo alongside
+			// the row (spec §10). Emission is exactly-once per
+			// (subject, kind, game) inside the emitter.
+			if _, err := m.flags.EmitFlag(ctx, loser, &info.GameURI, FlagTimingAnomaly, FlagSeverityInfo, detail); err != nil {
+				m.logger.Error("match: timingAnomaly flag emission failed", "did", loser, "err", err)
+			}
+		} else {
+			if err := m.repos.Flags.Insert(ctx, &repo.Flag{
+				SubjectDID: loser,
+				GameURI:    &info.GameURI,
+				Kind:       FlagTimingAnomaly,
+				Severity:   FlagSeverityInfo,
+				Detail:     &detail,
+			}); err != nil {
+				m.logger.Error("match: timingAnomaly flag write failed", "did", loser, "err", err)
+			}
 		}
 		m.logger.Warn("match: DID suspended from seek pool", "did", loser, "until", until)
 		return

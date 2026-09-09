@@ -229,3 +229,9 @@ func (w *Writer) UpdateGameRecord(ctx context.Context, rkey string, rec *playsbo
 func (w *Writer) WriteRevealRecord(ctx context.Context, rec *playsbot.GameReveal) (*WriteResult, error) {
 	return w.write(ctx, playsbot.NSIDGameReveal, rec)
 }
+
+// WriteFlagRecord creates a bot.plays.bot.flag record (spec §4.10). The
+// indexer's flag emitter pairs this with the flags table row.
+func (w *Writer) WriteFlagRecord(ctx context.Context, rec *playsbot.BotFlag) (*WriteResult, error) {
+	return w.write(ctx, playsbot.NSIDBotFlag, rec)
+}

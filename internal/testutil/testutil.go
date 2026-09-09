@@ -24,6 +24,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jcalabro/atmos/api/comatproto"
+	"github.com/jcalabro/atmos/xrpc"
+	"github.com/jcalabro/gt"
+
 	"github.com/haileyok/botplaysbot/internal/db"
 )
 
@@ -257,6 +261,57 @@ func (h *PDSHarness) CreateAccount(t testingT) Account {
 		t.Fatalf("testutil: create account response: %v", err)
 	}
 	return account
+}
+
+// Client returns an xrpc client authenticated as the account (app-password
+// session), for repo writes in indexer tests.
+func (h *PDSHarness) Client(t testingT, a Account) *xrpc.Client {
+	t.Helper()
+	client := &xrpc.Client{Host: h.PDS}
+	if _, err := client.CreateSession(context.Background(), a.Handle, a.AppPassword); err != nil {
+		t.Fatalf("testutil: createSession at %s: %v", h.PDS, err)
+	}
+	return client
+}
+
+// WriteRecord creates a repo record with an explicit rkey. On conflict
+// (already created) it falls back to putRecord so callers can retry a
+// write idempotently while waiting for an indexer to catch up.
+func WriteRecord(ctx context.Context, client *xrpc.Client, repo, collection, rkey string, record any) (string, string, error) {
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return "", "", err
+	}
+	out, err := comatproto.RepoCreateRecord(ctx, client, &comatproto.RepoCreateRecord_Input{
+		Repo:       repo,
+		Collection: collection,
+		Rkey:       gt.Some(rkey),
+		Record:     raw,
+	})
+	if err == nil {
+		return out.URI, out.CID, nil
+	}
+	// Already exists (previous attempt landed): overwrite in place.
+	put, perr := comatproto.RepoPutRecord(ctx, client, &comatproto.RepoPutRecord_Input{
+		Repo:       repo,
+		Collection: collection,
+		Rkey:       rkey,
+		Record:     raw,
+	})
+	if perr != nil {
+		return "", "", err // surface the original create error
+	}
+	return put.URI, put.CID, nil
+}
+
+// DeleteRecord deletes a repo record.
+func DeleteRecord(ctx context.Context, client *xrpc.Client, repo, collection, rkey string) error {
+	_, err := comatproto.RepoDeleteRecord(ctx, client, &comatproto.RepoDeleteRecord_Input{
+		Repo:       repo,
+		Collection: collection,
+		Rkey:       rkey,
+	})
+	return err
 }
 
 // freePort asks the kernel for a free TCP port (racy but good enough for

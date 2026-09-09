@@ -28,6 +28,7 @@ import (
 	"github.com/haileyok/botplaysbot/internal/db"
 	"github.com/haileyok/botplaysbot/internal/engine"
 	"github.com/haileyok/botplaysbot/internal/games"
+	"github.com/haileyok/botplaysbot/internal/indexer"
 	"github.com/haileyok/botplaysbot/internal/keys"
 	"github.com/haileyok/botplaysbot/internal/match"
 	"github.com/haileyok/botplaysbot/internal/repo"
@@ -55,6 +56,7 @@ type AppView struct {
 	engines engine.Registry
 	games   *games.Manager
 	matcher *match.Matcher
+	indexer *indexer.Indexer
 
 	xrpc *xrpcserver.Server
 	mux  *http.ServeMux
@@ -153,9 +155,14 @@ func New(ctx context.Context, cfg *config.Config, opts ...Option) (*AppView, err
 
 	// 6b. Matchmaking (Phase D): challenges, seek pool + pairing loop,
 	// subscriptions. The matcher observes finished games for no-show
-	// detection and registers its own endpoints.
+	// detection and registers its own endpoints. Phase E wires the flag
+	// emitter so the no-show timingAnomaly also lands as a
+	// bot.plays.bot.flag record in the service repo.
+	av.indexer = indexer.New(cfg, av.pool, av.repos, av.signingKey.Public().(ed25519.PublicKey), av.writer,
+		logger.With("component", "indexer"))
 	av.matcher = match.NewMatcher(cfg, av.pool, av.repos, av.games,
-		match.ProvisionalRatingSource{}, logger.With("component", "match"))
+		match.ProvisionalRatingSource{}, logger.With("component", "match"),
+		match.WithFlagEmitter(av.indexer.FlagEmitter()))
 	av.games.SetFinishHook(av.matcher.OnFinish)
 	match.Register(av.xrpc, av.auth, av.matcher)
 	if err := match.RegisterSubscription(av.xrpc, av.matcher); err != nil {
@@ -166,6 +173,7 @@ func New(ctx context.Context, cfg *config.Config, opts ...Option) (*AppView, err
 	}
 	av.games.StartSweeper(cfg.Tunables.SweeperInterval)
 	av.matcher.StartPairing(cfg.Tunables.PairingInterval)
+	av.indexer.Start()
 
 	// 7. HTTP mux. The xrpc mount is wrapped so the authenticated
 	// subscription endpoint (match.subscribe) gets its bearer token
@@ -236,6 +244,10 @@ func (a *AppView) Games() *games.Manager { return a.games }
 // inspect the notification hub through it).
 func (a *AppView) Matcher() *match.Matcher { return a.matcher }
 
+// Indexer exposes the repo event indexer (tests inspect counters and the
+// ingest pipeline; the consume loop itself started in New).
+func (a *AppView) Indexer() *indexer.Indexer { return a.indexer }
+
 // Auth exposes the verifier (tests use it to seed cache state).
 func (a *AppView) Auth() *auth.Verifier { return a.auth }
 
@@ -294,8 +306,11 @@ func (a *AppView) Start(ctx context.Context) error {
 }
 
 // Close releases resources (auth janitor, game sweeper, pairing loop,
-// pool when owned).
+// indexer, pool when owned).
 func (a *AppView) Close() {
+	if a.indexer != nil {
+		a.indexer.Close()
+	}
 	if a.matcher != nil {
 		a.matcher.Close()
 	}

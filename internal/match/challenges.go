@@ -294,11 +294,12 @@ func (m *Matcher) createChallengeGame(ctx context.Context, c *repo.Challenge, ac
 	}
 
 	var challengeRef *games.ChallengeRef
-	if c.RepoURI != nil {
-		// Repo-backed: attach the strongRef. The CID arrives with the
-		// indexed record (Phase E); without it there is no valid strongRef,
-		// so XRPC-created challenges (repo_uri NULL) carry none.
-		challengeRef = &games.ChallengeRef{URI: *c.RepoURI}
+	if c.RepoURI != nil && c.RepoCID != nil {
+		// Repo-backed (the Phase E indexer filled repo_uri + repo_cid from
+		// the bot.plays.bot.game.challenge record): attach the strongRef.
+		// Both parts are required for a valid com.atproto.repo.strongRef;
+		// XRPC-created challenges (repo_uri NULL) carry none.
+		challengeRef = &games.ChallengeRef{URI: *c.RepoURI, CID: *c.RepoCID}
 	}
 
 	created, err := m.games.CreateGame(ctx, games.CreateParams{

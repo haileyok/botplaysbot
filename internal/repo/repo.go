@@ -335,6 +335,49 @@ func (r *MovesRepo) LinkRepoRecord(ctx context.Context, gameURI string, ply int,
 	return nil
 }
 
+// SetCIDIfUnset backfills the game record CID from the indexed service
+// repo record (the CID exists only after the PDS write; the firehose is
+// where it becomes observable). No-op when the row already has a CID or
+// does not exist.
+func (r *GamesRepo) SetCIDIfUnset(ctx context.Context, uri, cid string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE games SET cid=$2 WHERE uri=$1 AND cid IS NULL`, uri, cid)
+	return err
+}
+
+// ListMissingRecords returns accepted moves whose repo record never
+// arrived (repo_uri NULL) and whose receipt time is older than `before`
+// (spec §10 missingMoveRecord). Bounded by limit, oldest first.
+func (r *MovesRepo) ListMissingRecords(ctx context.Context, before time.Time, limit int) ([]MissingRecord, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT game_uri, ply, player_did, received_at
+		 FROM moves
+		 WHERE repo_uri IS NULL AND received_at < $1
+		 ORDER BY received_at
+		 LIMIT $2`, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []MissingRecord
+	for rows.Next() {
+		var m MissingRecord
+		if err := rows.Scan(&m.GameURI, &m.Ply, &m.PlayerDID, &m.ReceivedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// MissingRecord is one accepted move still missing its repo record.
+type MissingRecord struct {
+	GameURI    string
+	Ply        int
+	PlayerDID  string
+	ReceivedAt time.Time
+}
+
 // ListByGame returns a game's moves ordered by ply.
 func (r *MovesRepo) ListByGame(ctx context.Context, gameURI string) ([]Move, error) {
 	rows, err := r.pool.Query(ctx,
@@ -372,7 +415,11 @@ type Challenge struct {
 	Status          string
 	ExpiresAt       *time.Time
 	RepoURI         *string
-	CreatedAt       *time.Time
+	// RepoCID is the record CID of the repo-backed challenge; both it and
+	// RepoURI must be set for a valid strongRef (Phase E fills them from
+	// the indexed bot.plays.bot.game.challenge record).
+	RepoCID   *string
+	CreatedAt *time.Time
 }
 
 // Challenge statuses (spec §9a.1/9a.2 lifecycle).
@@ -393,13 +440,13 @@ func NewChallengesRepo(pool *pgxpool.Pool) *ChallengesRepo { return &ChallengesR
 
 const challengeColumns = `id, challenger_did, opponent_did, game_type, variant,
 	time_control, commentary_delay, seat_preference, rated, status, expires_at,
-	repo_uri, created_at`
+	repo_uri, repo_cid, created_at`
 
 func scanChallenge(row pgx.Row) (*Challenge, error) {
 	var c Challenge
 	err := row.Scan(&c.ID, &c.ChallengerDID, &c.OpponentDID, &c.GameType, &c.Variant,
 		&c.TimeControl, &c.CommentaryDelay, &c.SeatPreference, &c.Rated, &c.Status,
-		&c.ExpiresAt, &c.RepoURI, &c.CreatedAt)
+		&c.ExpiresAt, &c.RepoURI, &c.RepoCID, &c.CreatedAt)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -411,10 +458,29 @@ func (r *ChallengesRepo) Insert(ctx context.Context, c *Challenge) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO challenges (id, challenger_did, opponent_did, game_type, variant,
 		    time_control, commentary_delay, seat_preference, rated, status, expires_at,
-		    repo_uri, created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now())`,
+		    repo_uri, repo_cid, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now())`,
 		c.ID, c.ChallengerDID, c.OpponentDID, c.GameType, c.Variant, c.TimeControl,
-		c.CommentaryDelay, c.SeatPreference, c.Rated, c.Status, c.ExpiresAt, c.RepoURI)
+		c.CommentaryDelay, c.SeatPreference, c.Rated, c.Status, c.ExpiresAt, c.RepoURI, c.RepoCID)
+	return err
+}
+
+// UpsertIndexed stores a challenge that arrived as a repo record
+// (bot.plays.bot.game.challenge, indexed by the Phase E indexer). The row
+// key is the record key, so a re-ingest (create replay or update) refreshes
+// the repo backing and expiry without clobbering a lifecycle status a
+// concurrent accept/decline/cancel already moved the row to.
+func (r *ChallengesRepo) UpsertIndexed(ctx context.Context, c *Challenge) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO challenges (id, challenger_did, opponent_did, game_type, variant,
+		    time_control, commentary_delay, seat_preference, rated, status, expires_at,
+		    repo_uri, repo_cid, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now())
+		 ON CONFLICT (id) DO UPDATE SET
+		   repo_uri=EXCLUDED.repo_uri, repo_cid=EXCLUDED.repo_cid,
+		   expires_at=EXCLUDED.expires_at`,
+		c.ID, c.ChallengerDID, c.OpponentDID, c.GameType, c.Variant, c.TimeControl,
+		c.CommentaryDelay, c.SeatPreference, c.Rated, c.Status, c.ExpiresAt, c.RepoURI, c.RepoCID)
 	return err
 }
 
@@ -822,6 +888,41 @@ func (r *FlagsRepo) Insert(ctx context.Context, f *Flag) error {
 		 VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, created_at`,
 		f.SubjectDID, f.GameURI, f.Kind, f.Severity, f.Detail, f.RepoURI).
 		Scan(&f.ID, &f.CreatedAt)
+}
+
+// InsertOnce records a flag unless an identical assertion — same (subject,
+// kind, game) — already exists (the idx_flags_unique_assertion index is the
+// arbiter). It reports whether a new row was inserted, so callers can emit
+// the corresponding flag record exactly once. Conflicts are not errors:
+// they mean the flag was already asserted.
+func (r *FlagsRepo) InsertOnce(ctx context.Context, f *Flag) (bool, error) {
+	tag, err := r.pool.Exec(ctx,
+		`INSERT INTO flags (subject_did, game_uri, kind, severity, detail, repo_uri)
+		 VALUES ($1,$2,$3,$4,$5,$6)
+		 ON CONFLICT (subject_did, kind, (COALESCE(game_uri, ''))) DO NOTHING`,
+		f.SubjectDID, f.GameURI, f.Kind, f.Severity, f.Detail, f.RepoURI)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	// Recover the assigned id/created_at for the caller (best effort).
+	err = r.pool.QueryRow(ctx,
+		`SELECT id, created_at FROM flags
+		 WHERE subject_did=$1 AND kind=$2 AND game_uri IS NOT DISTINCT FROM $3
+		 ORDER BY id DESC LIMIT 1`,
+		f.SubjectDID, f.Kind, f.GameURI).Scan(&f.ID, &f.CreatedAt)
+	if err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// SetRepoURI records the flag record's repo URI after emission.
+func (r *FlagsRepo) SetRepoURI(ctx context.Context, id int64, repoURI string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE flags SET repo_uri=$2 WHERE id=$1`, id, repoURI)
+	return err
 }
 
 // ListBySubject returns a DID's flags, newest first.

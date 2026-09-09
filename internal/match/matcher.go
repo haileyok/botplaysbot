@@ -62,6 +62,14 @@ const (
 	FlagSeverityInfo  = "info"
 )
 
+// FlagEmitter asserts a flag end to end — flags row plus the
+// bot.plays.bot.flag record in the service repo (the Phase E indexer
+// provides the implementation). A nil emitter keeps the rows-only
+// fallback for tests without a service repo.
+type FlagEmitter interface {
+	EmitFlag(ctx context.Context, subjectDID string, gameURI *string, kind, severity, detail string) (bool, error)
+}
+
 // Error is a matcher-domain failure; the XRPC layer maps Code to the error
 // envelope name.
 type Error struct {
@@ -86,6 +94,10 @@ type Matcher struct {
 	games  *games.Manager
 	rating RatingSource
 	hub    *Hub
+	// flags, when set, emits the bot.plays.bot.flag record alongside the
+	// flags row (Phase E); nil keeps rows-only (tests without a service
+	// repo).
+	flags FlagEmitter
 
 	now  func() time.Time
 	rand *rand.Rand
@@ -104,8 +116,9 @@ type Matcher struct {
 type MatcherOption func(*matcherOptions)
 
 type matcherOptions struct {
-	now  func() time.Time
-	rand *rand.Rand
+	now   func() time.Time
+	rand  *rand.Rand
+	flags FlagEmitter
 }
 
 // WithNow overrides the matcher clock (tests).
@@ -116,6 +129,12 @@ func WithNow(now func() time.Time) MatcherOption {
 // WithRand overrides the seat tie-break source (tests: deterministic seeds).
 func WithRand(r *rand.Rand) MatcherOption {
 	return func(o *matcherOptions) { o.rand = r }
+}
+
+// WithFlagEmitter wires the flag record emitter (Phase E). Omitted in
+// tests: timingAnomaly flags land as rows only.
+func WithFlagEmitter(e FlagEmitter) MatcherOption {
+	return func(o *matcherOptions) { o.flags = e }
 }
 
 // NewMatcher assembles the matcher.
@@ -133,6 +152,7 @@ func NewMatcher(cfg *config.Config, pool *pgxpool.Pool, repos *repo.Pool, gm *ga
 		games:  gm,
 		rating: rating,
 		hub:    NewHub(NewPresence()),
+		flags:  o.flags,
 		now:    o.now,
 		rand:   o.rand,
 		noShow: map[string]int{},
