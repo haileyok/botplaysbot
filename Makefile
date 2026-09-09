@@ -42,9 +42,13 @@ typecheck:
 dev:
 	go run ./cmd/appview
 
-## demo: run a demo stack (placeholder; later phases fill this in)
+## demo: run a demo stack — TS random-mover vs Go random-mover, watchable at
+## the printed URL. Ctrl-C to tear down. (docker db must be startable)
 demo:
-	@echo "demo: not implemented yet (Phase B+)"
+	node packages/dev/demo.mjs
+
+demo-stockfish:
+	node packages/dev/demo.mjs --stockfish
 
 ## codegen: regenerate Go lexicon types from lexicons/ (atmos lexgen)
 codegen:

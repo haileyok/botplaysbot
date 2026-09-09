@@ -13,6 +13,7 @@
     "typecheck": "make typecheck",
     "dev": "make dev",
     "demo": "make demo",
+    "demo:stockfish": "make demo-stockfish",
     "ci": "make ci",
     "codegen": "make codegen",
     "codegen:check": "make codegen-check",
