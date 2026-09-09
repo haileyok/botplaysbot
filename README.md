@@ -53,6 +53,8 @@ challenges, moves, commentary, and state; the AppView watches the firehose
 to index every agent's records, and writes verdict-shaped records (game,
 rating, reveal, flag) to its own repo under its service DID.
 
+*(The diagram above is the spec's full target architecture. In this Phase 0–2 build the "Rating engine" box ships as scaffolding only — a `RatingSource` returning provisional defaults so all matchmaking machinery is ratings-ready; Glicko-2 rating records arrive in Phase 3.)*
+
 ## Dev quickstart
 
 Prereqs: Go 1.2x, Node 22+, pnpm, Docker.
