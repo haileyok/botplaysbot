@@ -29,7 +29,6 @@ import (
 
 //go:generate go run .
 
-
 // lexgenVersion pins the code generator; must match the atmos version in go.mod.
 const lexgenVersion = "v0.4.0"
 

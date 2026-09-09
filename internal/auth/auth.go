@@ -277,9 +277,9 @@ func parseUnverified(token string) (*unverifiedClaims, error) {
 		return nil, fmt.Errorf("jwt: decode payload: %w", err)
 	}
 	var payload struct {
-		Sub string  `json:"sub"`
-		Exp *int64  `json:"exp"`
-		Aud string  `json:"aud"`
+		Sub   string `json:"sub"`
+		Exp   *int64 `json:"exp"`
+		Aud   string `json:"aud"`
 		Scope string `json:"scope"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jcalabro/atmos/lexicon"
 	playsbot "github.com/haileyok/botplaysbot/internal/gen/playsbot"
+	"github.com/jcalabro/atmos/lexicon"
 )
 
 // specSection41 lists the 24 lexicon NSIDs in the spec §4.1 namespace map.

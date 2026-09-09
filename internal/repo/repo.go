@@ -195,17 +195,17 @@ func (r *MovesRepo) ListByGame(ctx context.Context, gameURI string) ([]Move, err
 
 // Challenge mirrors the challenges table (spec §9a.1/9a.2).
 type Challenge struct {
-	ID           string
+	ID            string
 	ChallengerDID string
-	OpponentDID  *string
-	GameType     string
-	Variant      *string
-	TimeControl  json.RawMessage
-	Rated        bool
-	Status       string
-	ExpiresAt    *time.Time
-	RepoURI      *string
-	CreatedAt    *time.Time
+	OpponentDID   *string
+	GameType      string
+	Variant       *string
+	TimeControl   json.RawMessage
+	Rated         bool
+	Status        string
+	ExpiresAt     *time.Time
+	RepoURI       *string
+	CreatedAt     *time.Time
 }
 
 // ChallengesRepo is CRUD for challenges.
@@ -415,22 +415,22 @@ func (r *FlagsRepo) ListBySubject(ctx context.Context, did string, limit int) ([
 
 // Commentary mirrors the commentary table (spec §8).
 type Commentary struct {
-	URI           string
-	CID           *string
-	GameURI       string
-	Ply           *int
-	PlayerDID     *string
-	Visibility    string
-	Text          *string
-	Ciphertext    []byte
-	Nonce         []byte
-	KeyID         *string
-	ContentKey    []byte
-	EscrowStatus  *string
-	ReceivedAt    *time.Time
-	RevealsAtPly  *int
-	RevealsAt     *time.Time
-	RevealedAt    *time.Time
+	URI          string
+	CID          *string
+	GameURI      string
+	Ply          *int
+	PlayerDID    *string
+	Visibility   string
+	Text         *string
+	Ciphertext   []byte
+	Nonce        []byte
+	KeyID        *string
+	ContentKey   []byte
+	EscrowStatus *string
+	ReceivedAt   *time.Time
+	RevealsAtPly *int
+	RevealsAt    *time.Time
+	RevealedAt   *time.Time
 }
 
 // CommentaryRepo is CRUD for commentary.

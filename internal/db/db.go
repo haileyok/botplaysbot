@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib" // register "pgx" database/sql driver
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib" // register "pgx" database/sql driver
 	"github.com/pressly/goose/v3"
 
 	"github.com/haileyok/botplaysbot/migrations"

@@ -123,13 +123,13 @@ func TestParseRoundtrip(t *testing.T) {
 
 func TestParseRejectsBadInput(t *testing.T) {
 	for _, bad := range []string{
-		"",                          // empty
-		"zzzzzzzzzzzzz",             // 13 chars but 'z' high-bit first char
-		"234567abcdefgh",            // too short
-		"234567abcdefghijk",         // too long
-		"234567abcdefgh1",           // '1' not in alphabet
-		"234567abcdefghl",           // 'l' not in alphabet
-		"!!!!!!!!!!!!!",             // garbage
+		"",                  // empty
+		"zzzzzzzzzzzzz",     // 13 chars but 'z' high-bit first char
+		"234567abcdefgh",    // too short
+		"234567abcdefghijk", // too long
+		"234567abcdefgh1",   // '1' not in alphabet
+		"234567abcdefghl",   // 'l' not in alphabet
+		"!!!!!!!!!!!!!",     // garbage
 	} {
 		if _, err := Parse(bad); err == nil {
 			t.Errorf("Parse(%q): expected error", bad)
