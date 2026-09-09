@@ -8,9 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -24,13 +26,37 @@ func mapNotFound(err error) error {
 	return err
 }
 
-// Pool wraps the pgx pool shared by all repositories.
+// Pool wraps the pgx pool shared by all repositories and exposes the
+// per-table repositories.
 type Pool struct {
 	*pgxpool.Pool
+	Games      *GamesRepo
+	Moves      *MovesRepo
+	Challenges *ChallengesRepo
+	Seeks      *SeeksRepo
+	Flags      *FlagsRepo
+	Commentary *CommentaryRepo
+	Actors     *ActorsRepo
 }
 
 // New wraps a pgx pool.
-func New(pool *pgxpool.Pool) *Pool { return &Pool{pool} }
+func New(pool *pgxpool.Pool) *Pool {
+	return &Pool{
+		Pool:       pool,
+		Games:      NewGamesRepo(pool),
+		Moves:      NewMovesRepo(pool),
+		Challenges: NewChallengesRepo(pool),
+		Seeks:      NewSeeksRepo(pool),
+		Flags:      NewFlagsRepo(pool),
+		Commentary: NewCommentaryRepo(pool),
+		Actors:     NewActorsRepo(pool),
+	}
+}
+
+// Begin starts a transaction on the shared pool.
+func (p *Pool) Begin(ctx context.Context) (pgx.Tx, error) {
+	return p.Pool.Begin(ctx)
+}
 
 // Game mirrors the games table (spec App. A). URI is the AT URI of the
 // bot.plays.bot.game record; state is the authoritative game state.
@@ -51,16 +77,25 @@ type Game struct {
 	CreatedAt       *time.Time
 	StartedAt       *time.Time
 	FinishedAt      *time.Time
+	// ClockAnchor is the receipt time the running clock derives from
+	// (startedAt at creation, each accepted move's receivedAt after).
+	ClockAnchor *time.Time
+	// DrawOfferDID/DrawOfferPly are the pending draw offer, if any
+	// (spec §5.6: expired when the offerer's next move is accepted).
+	DrawOfferDID *string
+	DrawOfferPly *int
 }
 
 const gameColumns = `uri, cid, game_type, variant, status, players, time_control,
-	commentary_delay, seed, state, ply, turn_did, result, created_at, started_at, finished_at`
+	commentary_delay, seed, state, ply, turn_did, result, created_at, started_at,
+	finished_at, clock_anchor, draw_offer_did, draw_offer_ply`
 
 func scanGame(row pgx.Row) (*Game, error) {
 	var g Game
 	err := row.Scan(&g.URI, &g.CID, &g.GameType, &g.Variant, &g.Status, &g.Players,
 		&g.TimeControl, &g.CommentaryDelay, &g.Seed, &g.State, &g.Ply, &g.TurnDID,
-		&g.Result, &g.CreatedAt, &g.StartedAt, &g.FinishedAt)
+		&g.Result, &g.CreatedAt, &g.StartedAt, &g.FinishedAt, &g.ClockAnchor,
+		&g.DrawOfferDID, &g.DrawOfferPly)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -77,10 +112,11 @@ func NewGamesRepo(pool *pgxpool.Pool) *GamesRepo { return &GamesRepo{pool} }
 func (r *GamesRepo) Insert(ctx context.Context, g *Game) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO games (`+gameColumns+`)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 		g.URI, g.CID, g.GameType, g.Variant, g.Status, g.Players, g.TimeControl,
 		g.CommentaryDelay, g.Seed, g.State, g.Ply, g.TurnDID, g.Result,
-		g.CreatedAt, g.StartedAt, g.FinishedAt)
+		g.CreatedAt, g.StartedAt, g.FinishedAt, g.ClockAnchor,
+		g.DrawOfferDID, g.DrawOfferPly)
 	return err
 }
 
@@ -92,13 +128,22 @@ func (r *GamesRepo) Get(ctx context.Context, uri string) (*Game, error) {
 
 // Update overwrites the mutable columns of the game at uri.
 func (r *GamesRepo) Update(ctx context.Context, g *Game) error {
-	tag, err := r.pool.Exec(ctx,
+	return r.update(ctx, r.pool.Exec, g)
+}
+
+// execFunc abstracts pool vs transaction execution.
+type execFunc = func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+
+func (r *GamesRepo) update(ctx context.Context, ex execFunc, g *Game) error {
+	tag, err := ex(ctx,
 		`UPDATE games SET cid=$2, status=$3, players=$4, time_control=$5,
 		   commentary_delay=$6, seed=$7, state=$8, ply=$9, turn_did=$10,
-		   result=$11, started_at=$12, finished_at=$13
+		   result=$11, started_at=$12, finished_at=$13, clock_anchor=$14,
+		   draw_offer_did=$15, draw_offer_ply=$16
 		 WHERE uri=$1`,
 		g.URI, g.CID, g.Status, g.Players, g.TimeControl, g.CommentaryDelay,
-		g.Seed, g.State, g.Ply, g.TurnDID, g.Result, g.StartedAt, g.FinishedAt)
+		g.Seed, g.State, g.Ply, g.TurnDID, g.Result, g.StartedAt, g.FinishedAt,
+		g.ClockAnchor, g.DrawOfferDID, g.DrawOfferPly)
 	if err != nil {
 		return err
 	}
@@ -106,6 +151,93 @@ func (r *GamesRepo) Update(ctx context.Context, g *Game) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// UpdateTx runs Update inside a transaction.
+func (r *GamesRepo) UpdateTx(ctx context.Context, tx pgx.Tx, g *Game) error {
+	return r.update(ctx, tx.Exec, g)
+}
+
+// GamesFilter selects games for ListFiltered.
+type GamesFilter struct {
+	Status   string // empty = any
+	GameType string // empty = any
+	Player   string // DID; empty = any
+	// BeforeURI is the cursor: return games with uri < BeforeURI (list is
+	// newest-first by uri). Empty starts from the newest.
+	BeforeURI string
+	Limit     int
+}
+
+// ListFiltered returns games matching the filter, newest-first by uri.
+func (r *GamesRepo) ListFiltered(ctx context.Context, f GamesFilter) ([]*Game, error) {
+	if f.Limit <= 0 {
+		f.Limit = 50
+	}
+	sql := `SELECT ` + gameColumns + ` FROM games WHERE true`
+	args := []any{}
+	if f.Status != "" {
+		args = append(args, f.Status)
+		sql += fmt.Sprintf(` AND status = $%d`, len(args))
+	}
+	if f.GameType != "" {
+		args = append(args, f.GameType)
+		sql += fmt.Sprintf(` AND game_type = $%d`, len(args))
+	}
+	if f.Player != "" {
+		args = append(args, f.Player)
+		sql += fmt.Sprintf(` AND players @> $%d::jsonb`, len(args))
+		args[len(args)-1] = []byte(`[{"did":"` + f.Player + `"}]`)
+	}
+	if f.BeforeURI != "" {
+		args = append(args, f.BeforeURI)
+		sql += fmt.Sprintf(` AND uri < $%d`, len(args))
+	}
+	args = append(args, f.Limit)
+	sql += fmt.Sprintf(` ORDER BY uri DESC LIMIT $%d`, len(args))
+
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*Game
+	for rows.Next() {
+		g, err := scanGame(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// ListExpired returns active games whose perMove clock has passed their
+// deadline at now (spec §7: the sweeper finishes these so an absent
+// opponent does not need to poll). Only perMove games exist while active.
+func (r *GamesRepo) ListExpired(ctx context.Context, now time.Time, limit int) ([]*Game, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+gameColumns+` FROM games
+		 WHERE status = 'active' AND clock_anchor IS NOT NULL
+		   AND time_control->>'kind' = 'perMove'
+		   AND clock_anchor + make_interval(secs => (time_control->>'perMoveSeconds')::float8) <= $1
+		 ORDER BY clock_anchor
+		 LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*Game
+	for rows.Next() {
+		g, err := scanGame(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
 }
 
 // Move mirrors the moves table: one accepted move per (game, ply).
@@ -131,7 +263,16 @@ func NewMovesRepo(pool *pgxpool.Pool) *MovesRepo { return &MovesRepo{pool} }
 
 // Insert stores an accepted move.
 func (r *MovesRepo) Insert(ctx context.Context, m *Move) error {
-	_, err := r.pool.Exec(ctx,
+	return r.insert(ctx, r.pool.Exec, m)
+}
+
+// InsertTx runs Insert inside a transaction.
+func (r *MovesRepo) InsertTx(ctx context.Context, tx pgx.Tx, m *Move) error {
+	return r.insert(ctx, tx.Exec, m)
+}
+
+func (r *MovesRepo) insert(ctx context.Context, ex execFunc, m *Move) error {
+	_, err := ex(ctx,
 		`INSERT INTO moves (game_uri, ply, player_did, payload, notation, received_at,
 		    clock_remaining_ms, token, repo_uri, repo_cid, verified)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,

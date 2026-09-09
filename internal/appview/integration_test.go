@@ -64,6 +64,10 @@ func testConfig(t *testing.T, databaseURL string, keyDir string, pdsURL, plcURL,
 		ServiceSigningKeyFile: filepath.Join(keyDir, "service-signing.key"),
 		PLCDirectoryURL:       plcURL,
 		Port:                  0, // unused: tests serve in-process
+		Tunables: config.Tunables{
+			PerMoveSeconds:  300,
+			SweeperInterval: time.Second,
+		},
 	}
 }
 
@@ -155,8 +159,10 @@ func TestIntegrationBootAndHealthz(t *testing.T) {
 		t.Fatalf("healthz = %+v", health)
 	}
 
-	// Unknown XRPC methods get the proper XRPC error envelope.
-	status, body = env.get(t, "/xrpc/bot.plays.bot.game.getState", nil)
+	// Unknown XRPC methods still get the proper XRPC error envelope. The
+	// game lifecycle endpoints are mounted as of Phase C, so use a method
+	// no phase has registered yet.
+	status, body = env.get(t, "/xrpc/bot.plays.bot.actor.getLeaderboard", nil)
 	if status != http.StatusNotImplemented {
 		t.Fatalf("unmounted xrpc query = %d %s, want 501", status, body)
 	}

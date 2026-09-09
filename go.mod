@@ -3,9 +3,11 @@ module github.com/haileyok/botplaysbot
 go 1.26.0
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/jcalabro/atmos v0.4.0
 	github.com/jcalabro/gt v0.0.12
+	github.com/notnil/chess v1.10.0
 	github.com/pressly/goose/v3 v3.28.0
 	golang.org/x/time v0.15.0
 )

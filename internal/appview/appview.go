@@ -23,6 +23,8 @@ import (
 	"github.com/haileyok/botplaysbot/internal/auth"
 	"github.com/haileyok/botplaysbot/internal/config"
 	"github.com/haileyok/botplaysbot/internal/db"
+	"github.com/haileyok/botplaysbot/internal/engine"
+	"github.com/haileyok/botplaysbot/internal/games"
 	"github.com/haileyok/botplaysbot/internal/keys"
 	"github.com/haileyok/botplaysbot/internal/repo"
 	"github.com/haileyok/botplaysbot/internal/servicerepo"
@@ -45,6 +47,9 @@ type AppView struct {
 
 	auth   *auth.Verifier
 	writer *servicerepo.Writer
+
+	engines engine.Registry
+	games   *games.Manager
 
 	xrpc *xrpcserver.Server
 	mux  *http.ServeMux
@@ -131,9 +136,15 @@ func New(ctx context.Context, cfg *config.Config, opts ...Option) (*AppView, err
 	}
 	av.writer = writer
 
-	// 6. XRPC server: no business endpoints this phase; the mount returns
-	// proper XRPC error envelopes for unknown methods.
+	// 6. Game lifecycle: engine registry, moveToken minter, game manager
+	// (with the clock sweeper), and the game XRPC endpoints.
+	av.engines = engine.NewRegistry(engine.NewChess())
+	minter := games.NewTokenMinter(cfg.ServiceDID, av.signingKey)
+	av.games = games.NewManager(cfg, av.pool, av.repos, av.engines, minter, av.writer,
+		logger.With("component", "games"))
 	av.xrpc = &xrpcserver.Server{}
+	games.Register(av.xrpc, av.auth, av.games)
+	av.games.StartSweeper(cfg.Tunables.SweeperInterval)
 
 	// 7. HTTP mux.
 	av.mux = http.NewServeMux()
@@ -158,6 +169,10 @@ func (a *AppView) RegisterQuery(nsid string, mode auth.Mode, h xrpcserver.Handle
 func (a *AppView) RegisterProcedure(nsid string, mode auth.Mode, h xrpcserver.Handler) {
 	a.xrpc.HandleProcedure(nsid, a.auth.Wrap(h, mode))
 }
+
+// Games exposes the game manager (Phase D challenge acceptance and the WS
+// subscription endpoint attach through it).
+func (a *AppView) Games() *games.Manager { return a.games }
 
 // Auth exposes the verifier (tests use it to seed cache state).
 func (a *AppView) Auth() *auth.Verifier { return a.auth }
@@ -216,8 +231,11 @@ func (a *AppView) Start(ctx context.Context) error {
 	return nil
 }
 
-// Close releases resources (auth janitor, pool when owned).
+// Close releases resources (auth janitor, game sweeper, pool when owned).
 func (a *AppView) Close() {
+	if a.games != nil {
+		a.games.Close()
+	}
 	if a.auth != nil {
 		a.auth.Close()
 	}

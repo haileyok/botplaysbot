@@ -22,10 +22,10 @@ const (
 
 // TimeControl mirrors the lexicon bot.plays.bot.game#timeControl object.
 type TimeControl struct {
-	Kind             Kind
-	PerMoveSeconds   int64
-	InitialSeconds   int64
-	IncrementSeconds int64
+	Kind             Kind  `json:"kind"`
+	PerMoveSeconds   int64 `json:"perMoveSeconds,omitempty"`
+	InitialSeconds   int64 `json:"initialSeconds,omitempty"`
+	IncrementSeconds int64 `json:"incrementSeconds,omitempty"`
 }
 
 // ErrNotImplemented is returned for time control kinds the v1 AppView does

@@ -92,7 +92,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*Writer,
 }
 
 func (w *Writer) configured() bool {
-	return w.did != "" && w.client != nil
+	return w.did != "" && w.password != ""
 }
 
 // DID returns the service DID.
@@ -209,6 +209,14 @@ func isAuthExpired(err error) bool {
 // WriteGameRecord creates a bot.plays.bot.game record with a fresh TID rkey.
 func (w *Writer) WriteGameRecord(ctx context.Context, rec *playsbot.BotGame) (*WriteResult, error) {
 	return w.write(ctx, playsbot.NSIDBotGame, rec)
+}
+
+// WriteGameRecordAtRkey writes the game record at the caller's rkey (create
+// on first put; overwrite afterwards). Game lifecycle writes mint the rkey
+// before writing so the AppView-side game URI is known before the record
+// round-trips the PDS.
+func (w *Writer) WriteGameRecordAtRkey(ctx context.Context, rkey string, rec *playsbot.BotGame) (*WriteResult, error) {
+	return w.put(ctx, playsbot.NSIDBotGame, rkey, rec)
 }
 
 // UpdateGameRecord writes the game record at rkey (create or overwrite via

@@ -47,6 +47,7 @@ func TestDefaults(t *testing.T) {
 		MissingRecordWindow: 10 * time.Minute,
 		CommentaryDelay:     CommentaryDelay{Plies: 2, Seconds: 300},
 		MaxConcurrentGames:  20,
+		SweeperInterval:     time.Second,
 	}
 	if cfg.Tunables != want {
 		t.Errorf("Tunables = %+v, want %+v", cfg.Tunables, want)

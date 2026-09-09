@@ -80,6 +80,9 @@ type Tunables struct {
 	CommentaryDelay CommentaryDelay
 	// MaxConcurrentGames caps active games per DID (§10: 20, configurable).
 	MaxConcurrentGames int
+	// SweeperInterval is the clock sweeper cadence: how often the AppView
+	// looks for active games past their deadline (§7).
+	SweeperInterval time.Duration
 }
 
 // Config is the process configuration.
@@ -209,6 +212,10 @@ func LoadFromEnv(get func(string) string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	sweeperInterval, err := durEnv(get, "PLAYSBOT_SWEEPER_INTERVAL", time.Second)
+	if err != nil {
+		return nil, err
+	}
 
 	t := Tunables{
 		PerMoveSeconds:      perMoveSeconds,
@@ -226,6 +233,7 @@ func LoadFromEnv(get func(string) string) (*Config, error) {
 			Seconds: commentaryDelaySeconds,
 		},
 		MaxConcurrentGames: maxConcurrentGames,
+		SweeperInterval:    sweeperInterval,
 	}
 	if t.PerMoveSeconds <= 0 {
 		return nil, fmt.Errorf("config: PLAYSBOT_PER_MOVE_SECONDS must be > 0")
@@ -233,6 +241,9 @@ func LoadFromEnv(get func(string) string) (*Config, error) {
 	if t.PairingInterval <= 0 || t.WindowWidenInterval <= 0 || t.RepeatCooldown < 0 ||
 		t.MatchGrace < 0 || t.StandingExpire <= 0 || t.MissingRecordWindow <= 0 {
 		return nil, fmt.Errorf("config: invalid interval tunable")
+	}
+	if t.SweeperInterval <= 0 {
+		return nil, fmt.Errorf("config: PLAYSBOT_SWEEPER_INTERVAL must be > 0")
 	}
 	if t.RatingWindow < 0 || t.WindowWiden < 0 || t.WindowCap < t.RatingWindow {
 		return nil, fmt.Errorf("config: invalid rating window tunables")
