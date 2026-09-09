@@ -32,10 +32,16 @@ func OpenPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
+// migrateLockKey is an arbitrary-but-fixed advisory lock key so concurrent
+// processes (or concurrent test packages) serialize migrations instead of
+// racing on goose's version table.
+const migrateLockKey = 745983123
+
 // Migrate applies pending embedded migrations to the database at databaseURL.
 //
 // It uses goose with the migrations embedded at build time, so deployed
-// binaries carry their schema with them.
+// binaries carry their schema with them. A Postgres advisory lock serializes
+// concurrent migrators.
 func Migrate(ctx context.Context, databaseURL string) error {
 	goose.SetBaseFS(migrations.Files)
 	if err := goose.SetDialect("postgres"); err != nil {
@@ -47,6 +53,19 @@ func Migrate(ctx context.Context, databaseURL string) error {
 		return fmt.Errorf("db: open for migration: %w", err)
 	}
 	defer sqlDB.Close()
+
+	// Hold a session-level advisory lock for the duration of the run.
+	lockConn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("db: migrate lock conn: %w", err)
+	}
+	defer lockConn.Close()
+	if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrateLockKey); err != nil {
+		return fmt.Errorf("db: migrate advisory lock: %w", err)
+	}
+	defer func() {
+		_, _ = lockConn.ExecContext(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, migrateLockKey)
+	}()
 
 	if err := goose.UpContext(ctx, sqlDB, "."); err != nil {
 		return fmt.Errorf("db: migrate: %w", err)

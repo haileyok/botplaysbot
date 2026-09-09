@@ -11,6 +11,9 @@ web/dist/*
 # Go
 /bin/
 
+# Service runtime state (service signing key material; mode 0600)
+/data/
+
 # Environment
 .env
 .env.*

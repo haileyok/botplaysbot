@@ -1,5 +1,10 @@
 ROOT_PACKAGE := github.com/haileyok/botplaysbot
 
+# Default Postgres for `make test`/`make ci` (docker compose up -d db).
+# Integration tests skip with a clear message when the database is absent.
+DATABASE_URL ?= postgres://playsbot:playsbot@localhost:5432/playsbot?sslmode=disable
+export DATABASE_URL
+
 .DEFAULT_GOAL := help
 .PHONY: help build test lint typecheck dev demo ci codegen codegen-check clean
 
@@ -13,7 +18,7 @@ build:
 	pnpm --filter web build
 	go build -o bin/ ./cmd/...
 
-## test: run Go unit tests (no docker required)
+## test: run Go tests (unit + integration; integration skip cleanly when Postgres/dev PDS are unavailable)
 test:
 	go test -count=1 ./...
 

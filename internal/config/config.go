@@ -37,6 +37,14 @@ var DefaultEventSourceURL = map[EventSource]string{
 	EventSourceJetstream: "wss://jetstream1.us-east.bsky.network/subscribe",
 }
 
+// DefaultServiceSigningKeyFile is where the Ed25519 service signing key lives
+// when PLAYSBOT_SERVICE_SIGNING_KEY_FILE is unset.
+const DefaultServiceSigningKeyFile = "data/service-signing.key"
+
+// DefaultPLCDirectoryURL is the PLC directory used for did:plc resolution
+// when PLAYSBOT_PLC_DIRECTORY_URL is unset.
+const DefaultPLCDirectoryURL = "https://plc.directory"
+
 // CommentaryDelay controls the broadcast delay for delayed commentary
 // (spec §8.2): reveal at whichever comes first of plies or seconds.
 type CommentaryDelay struct {
@@ -90,6 +98,12 @@ type Config struct {
 	EventSource EventSource
 	// EventSourceURL is the websocket endpoint for the event source.
 	EventSourceURL string
+	// ServiceSigningKeyFile is the path of the Ed25519 service signing key
+	// (PEM, mode 0600). Generated on first boot if missing.
+	ServiceSigningKeyFile string
+	// PLCDirectoryName is the PLC directory base URL used for did:plc
+	// resolution. Point it at the dev PDS harness's PLC in local development.
+	PLCDirectoryURL string
 
 	Tunables Tunables
 }
@@ -112,6 +126,15 @@ func LoadFromEnv(get func(string) string) (*Config, error) {
 	cfg.PDSURL = strings.TrimRight(get("PLAYSBOT_PDS_URL"), "/")
 	cfg.ServiceDID = get("PLAYSBOT_SERVICE_DID")
 	cfg.ServiceAppPassword = get("PLAYSBOT_SERVICE_APP_PASSWORD")
+
+	cfg.ServiceSigningKeyFile = get("PLAYSBOT_SERVICE_SIGNING_KEY_FILE")
+	if cfg.ServiceSigningKeyFile == "" {
+		cfg.ServiceSigningKeyFile = DefaultServiceSigningKeyFile
+	}
+	cfg.PLCDirectoryURL = strings.TrimRight(get("PLAYSBOT_PLC_DIRECTORY_URL"), "/")
+	if cfg.PLCDirectoryURL == "" {
+		cfg.PLCDirectoryURL = DefaultPLCDirectoryURL
+	}
 
 	port, err := intEnv(get, "PLAYSBOT_PORT", 8080)
 	if err != nil {
