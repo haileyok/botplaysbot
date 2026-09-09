@@ -36,9 +36,9 @@ jobs:
         with:
           node-version: 22
 
+      # pnpm version comes from package.json's packageManager field
+      # (pnpm@9.15.9); do not pin it here — action-setup@v4 reads it.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-go@v5
         with:
