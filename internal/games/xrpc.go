@@ -28,25 +28,27 @@ import (
 
 // NSIDs of the game lifecycle endpoints.
 const (
-	NSIDSubmitMove  = "bot.plays.bot.game.submitMove"
-	NSIDGetState    = "bot.plays.bot.game.getState"
-	NSIDListGames   = "bot.plays.bot.game.listGames"
-	NSIDResign      = "bot.plays.bot.game.resign"
-	NSIDOfferDraw   = "bot.plays.bot.game.offerDraw"
-	NSIDAcceptDraw  = "bot.plays.bot.game.acceptDraw"
-	NSIDDeclineDraw = "bot.plays.bot.game.declineDraw"
+	NSIDSubmitMove     = "bot.plays.bot.game.submitMove"
+	NSIDGetState       = "bot.plays.bot.game.getState"
+	NSIDListGames      = "bot.plays.bot.game.listGames"
+	NSIDResign         = "bot.plays.bot.game.resign"
+	NSIDOfferDraw      = "bot.plays.bot.game.offerDraw"
+	NSIDAcceptDraw     = "bot.plays.bot.game.acceptDraw"
+	NSIDDeclineDraw    = "bot.plays.bot.game.declineDraw"
+	NSIDPostCommentary = "bot.plays.bot.game.postCommentary"
 )
 
 // Register mounts the game XRPC endpoints, wrapping each handler at its
 // auth mode.
 func Register(s *xrpcserver.Server, v *auth.Verifier, m *Manager) {
 	s.HandleProcedure(NSIDSubmitMove, v.Wrap(submitMove(m), auth.Required))
-	s.HandleQuery(NSIDGetState, v.Wrap(getState(m), auth.Optional))
+	s.HandleQuery(NSIDGetState, v.Wrap(withClientIP(getState(m)), auth.Optional))
 	s.HandleQuery(NSIDListGames, v.Wrap(listGames(m), auth.Optional))
 	s.HandleProcedure(NSIDResign, v.Wrap(resign(m), auth.Required))
 	s.HandleProcedure(NSIDOfferDraw, v.Wrap(offerDraw(m), auth.Required))
 	s.HandleProcedure(NSIDAcceptDraw, v.Wrap(acceptDraw(m), auth.Required))
 	s.HandleProcedure(NSIDDeclineDraw, v.Wrap(declineDraw(m), auth.Required))
+	s.HandleProcedure(NSIDPostCommentary, v.Wrap(postCommentary(m), auth.Required))
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +100,9 @@ func submitMove(m *Manager) xrpcserver.Handler {
 }
 
 // getState implements bot.plays.bot.game.getState (spec §5.2, public).
+// Reads that surface unrevealed delayed commentary are logged to
+// commentary_reads (§10 data capture; requester DID when authenticated,
+// else the client IP from the request).
 func getState(m *Manager) xrpcserver.Handler {
 	return xrpcserver.Query(func(ctx context.Context, p xrpcserver.Params) (*playsbot.GameGetState_Output, error) {
 		gameURI, err := p.String("game")
@@ -109,7 +114,66 @@ func getState(m *Manager) xrpcserver.Handler {
 		if err != nil {
 			return nil, xrpcError(err)
 		}
+		m.LogCommentaryReads(ctx, view, identityDID(id))
 		return renderState(view), nil
+	})
+}
+
+// withClientIP records the caller's IP (RemoteAddr, port stripped) on the
+// request context for the commentary_reads capture.
+func withClientIP(next xrpcserver.Handler) xrpcserver.Handler {
+	return xrpcserver.HandlerFunc(func(ctx context.Context, w http.ResponseWriter, r *xrpcserver.Request) error {
+		if r.HTTPReq != nil {
+			ctx = WithClientIP(ctx, ClientIPFromAddr(r.HTTPReq.RemoteAddr))
+		}
+		return next.ServeXRPC(ctx, w, r)
+	})
+}
+
+// postCommentary implements bot.plays.bot.game.postCommentary (spec §5.7,
+// auth Required). Validates the §4.6 field rules, attempts the escrow
+// unwrap, and returns {ok, keyId, receiptToken}. NEVER writes a record:
+// the agent writes its own repo record afterwards.
+func postCommentary(m *Manager) xrpcserver.Handler {
+	return xrpcserver.Procedure(func(ctx context.Context, _ xrpcserver.Params, in *playsbot.GamePostCommentary_Input) (*playsbot.GamePostCommentary_Output, error) {
+		id := auth.IdentityFromContext(ctx)
+		params := PostCommentaryParams{
+			PlayerDID:  id.DID,
+			GameURI:    in.Game.URI,
+			Ply:        in.Ply.ValOr(0),
+			Visibility: in.Visibility,
+			Ciphertext: in.Ciphertext,
+			Nonce:      in.Nonce,
+			ReceivedAt: m.now(),
+		}
+		if in.Text.HasVal() {
+			t := in.Text.Val()
+			params.Text = &t
+		}
+		if in.KeyId.HasVal() {
+			k := in.KeyId.Val()
+			params.KeyID = &k
+		}
+		if in.EscrowKey.HasVal() {
+			ek := in.EscrowKey.Val()
+			params.EscrowKeyMaterial = &EscrowKeyMaterial{
+				RotationID:         ek.RotationId,
+				EphemeralPublicKey: ek.EphemeralPublicKey,
+				WrappedKey:         ek.WrappedKey,
+			}
+		}
+		out, err := m.PostCommentary(ctx, params)
+		if err != nil {
+			return nil, xrpcError(err)
+		}
+		res := &playsbot.GamePostCommentary_Output{Ok: true}
+		if out.KeyID != nil {
+			res.KeyId = gt.Some(*out.KeyID)
+		}
+		if out.ReceiptToken != "" {
+			res.ReceiptToken = gt.Some(out.ReceiptToken)
+		}
+		return res, nil
 	})
 }
 
@@ -209,7 +273,7 @@ func renderState(v *GameView) *playsbot.GameGetState_Output {
 		Turn:       v.TurnDID,
 		ServerTime: RFC3339Millis(v.ServerTime),
 		Clocks:     make([]playsbot.GameGetState_Clock, 0, len(v.Clocks)),
-		Commentary: []playsbot.GameGetState_CommentaryEntry{}, // populated in Phase F
+		Commentary: []playsbot.GameGetState_CommentaryEntry{},
 	}
 	for _, c := range v.Clocks {
 		out.Clocks = append(out.Clocks, playsbot.GameGetState_Clock{
@@ -244,6 +308,35 @@ func renderState(v *GameView) *playsbot.GameGetState_Output {
 			entry.ClockRemainingMs = gt.Some(*h.ClockRemainingMs)
 		}
 		out.History = append(out.History, entry)
+	}
+	out.Commentary = renderCommentary(v.Commentary)
+	return out
+}
+
+// renderCommentary converts view commentary summaries to the getState
+// output entries (spec §5.2): text only when revealed; reveal bounds only
+// on unrevealed delayed records.
+func renderCommentary(entries []CommentaryEntry) []playsbot.GameGetState_CommentaryEntry {
+	out := make([]playsbot.GameGetState_CommentaryEntry, 0, len(entries))
+	for _, e := range entries {
+		ce := playsbot.GameGetState_CommentaryEntry{
+			Ply:        e.Ply,
+			Player:     e.Player,
+			Visibility: e.Visibility,
+			Revealed:   e.Revealed,
+		}
+		if e.Revealed && e.Text != nil {
+			ce.Text = gt.Some(*e.Text)
+		}
+		if !e.Revealed {
+			if e.RevealsAt != nil {
+				ce.RevealsAt = gt.Some(RFC3339Millis(*e.RevealsAt))
+			}
+			if e.RevealsAtPly != nil {
+				ce.RevealsAtPly = gt.Some(*e.RevealsAtPly)
+			}
+		}
+		out = append(out, ce)
 	}
 	return out
 }

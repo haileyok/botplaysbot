@@ -284,8 +284,9 @@ type GameCommentary struct {
 	Game          comatproto.RepoStrongRef            `json:"game"`
 	KeyId         gt.Option[string]                   `json:"keyId,omitzero"` // Agent-chosen id for the per-game key (allows multiple keys per game)
 	Nonce         []byte                              `json:"nonce,omitempty"`
-	Ply           gt.Option[int64]                    `json:"ply,omitzero"`  // Omit for whole-game/post-game commentary. 0 = pre-game.
-	Text          gt.Option[string]                   `json:"text,omitzero"` // Required when visibility=public
+	Ply           gt.Option[int64]                    `json:"ply,omitzero"`          // Omit for whole-game/post-game commentary. 0 = pre-game.
+	ReceiptToken  gt.Option[string]                   `json:"receiptToken,omitzero"` // Open-property extension: optional AppView receiptToken returned by game.postCommentary (compact E...
+	Text          gt.Option[string]                   `json:"text,omitzero"`         // Required when visibility=public
 	Visibility    string                              `json:"visibility"`
 
 	// extra preserves unknown fields for same-format round-trips.
@@ -294,16 +295,17 @@ type GameCommentary struct {
 
 // Precomputed CBOR key tokens for GameCommentary.
 var (
-	cborKey_GameCommentary_ply         = cbor.AppendTextKey(nil, "ply")
-	cborKey_GameCommentary_game        = cbor.AppendTextKey(nil, "game")
-	cborKey_GameCommentary_text        = cbor.AppendTextKey(nil, "text")
-	cborKey_GameCommentary_dollar_type = cbor.AppendTextKey(nil, "$type")
-	cborKey_GameCommentary_keyId       = cbor.AppendTextKey(nil, "keyId")
-	cborKey_GameCommentary_nonce       = cbor.AppendTextKey(nil, "nonce")
-	cborKey_GameCommentary_createdAt   = cbor.AppendTextKey(nil, "createdAt")
-	cborKey_GameCommentary_escrowKey   = cbor.AppendTextKey(nil, "escrowKey")
-	cborKey_GameCommentary_ciphertext  = cbor.AppendTextKey(nil, "ciphertext")
-	cborKey_GameCommentary_visibility  = cbor.AppendTextKey(nil, "visibility")
+	cborKey_GameCommentary_ply          = cbor.AppendTextKey(nil, "ply")
+	cborKey_GameCommentary_game         = cbor.AppendTextKey(nil, "game")
+	cborKey_GameCommentary_text         = cbor.AppendTextKey(nil, "text")
+	cborKey_GameCommentary_dollar_type  = cbor.AppendTextKey(nil, "$type")
+	cborKey_GameCommentary_keyId        = cbor.AppendTextKey(nil, "keyId")
+	cborKey_GameCommentary_nonce        = cbor.AppendTextKey(nil, "nonce")
+	cborKey_GameCommentary_createdAt    = cbor.AppendTextKey(nil, "createdAt")
+	cborKey_GameCommentary_escrowKey    = cbor.AppendTextKey(nil, "escrowKey")
+	cborKey_GameCommentary_ciphertext   = cbor.AppendTextKey(nil, "ciphertext")
+	cborKey_GameCommentary_visibility   = cbor.AppendTextKey(nil, "visibility")
+	cborKey_GameCommentary_receiptToken = cbor.AppendTextKey(nil, "receiptToken")
 )
 
 func (s *GameCommentary) MarshalCBOR() ([]byte, error) {
@@ -328,6 +330,9 @@ func (s *GameCommentary) AppendCBOR(buf []byte) ([]byte, error) {
 		n++
 	}
 	if s.Ciphertext != nil {
+		n++
+	}
+	if s.ReceiptToken.HasVal() {
 		n++
 	}
 	buf = cbor.AppendMapHeader(buf, uint64(n))
@@ -390,6 +395,11 @@ func (s *GameCommentary) AppendCBOR(buf []byte) ([]byte, error) {
 		ei, buf = appendCBORExtrasBefore(s.extra, ei, "visibility", buf)
 		buf = append(buf, cborKey_GameCommentary_visibility...)
 		buf = cbor.AppendText(buf, s.Visibility)
+		ei, buf = appendCBORExtrasBefore(s.extra, ei, "receiptToken", buf)
+		if s.ReceiptToken.HasVal() {
+			buf = append(buf, cborKey_GameCommentary_receiptToken...)
+			buf = cbor.AppendText(buf, s.ReceiptToken.Val())
+		}
 		_, buf = appendCBORExtrasBefore(s.extra, ei, "", buf)
 	} else {
 		if s.Ply.HasVal() {
@@ -439,6 +449,10 @@ func (s *GameCommentary) AppendCBOR(buf []byte) ([]byte, error) {
 		}
 		buf = append(buf, cborKey_GameCommentary_visibility...)
 		buf = cbor.AppendText(buf, s.Visibility)
+		if s.ReceiptToken.HasVal() {
+			buf = append(buf, cborKey_GameCommentary_receiptToken...)
+			buf = cbor.AppendText(buf, s.ReceiptToken.Val())
+		}
 	}
 	return buf, nil
 }
@@ -592,6 +606,26 @@ func (s *GameCommentary) UnmarshalCBORAt(data []byte, pos int) (int, error) {
 				}
 				s.extra = append(s.extra, extraField{Key: string(data[keyStart:keyEnd]), Value: append([]byte(nil), data[valueStart:pos]...), Encoding: extraEncodingCBOR})
 			}
+		case 12:
+			if string(data[keyStart:keyEnd]) == "receiptToken" {
+				if cbor.IsNull(data, pos) {
+					pos++
+				} else {
+					var v string
+					v, pos, err = cbor.ReadText(data, pos)
+					if err != nil {
+						return 0, err
+					}
+					s.ReceiptToken = gt.Some(v)
+				}
+			} else {
+				valueStart := pos
+				pos, err = cbor.SkipValue(data, pos)
+				if err != nil {
+					return 0, err
+				}
+				s.extra = append(s.extra, extraField{Key: string(data[keyStart:keyEnd]), Value: append([]byte(nil), data[valueStart:pos]...), Encoding: extraEncodingCBOR})
+			}
 		default:
 			valueStart := pos
 			pos, err = cbor.SkipValue(data, pos)
@@ -606,16 +640,17 @@ func (s *GameCommentary) UnmarshalCBORAt(data []byte, pos int) (int, error) {
 
 // Precomputed JSON key tokens for GameCommentary.
 var (
-	jsonKey_GameCommentary_dollar_type = []byte("\"$type\":")
-	jsonKey_GameCommentary_ciphertext  = []byte("\"ciphertext\":")
-	jsonKey_GameCommentary_createdAt   = []byte("\"createdAt\":")
-	jsonKey_GameCommentary_escrowKey   = []byte("\"escrowKey\":")
-	jsonKey_GameCommentary_game        = []byte("\"game\":")
-	jsonKey_GameCommentary_keyId       = []byte("\"keyId\":")
-	jsonKey_GameCommentary_nonce       = []byte("\"nonce\":")
-	jsonKey_GameCommentary_ply         = []byte("\"ply\":")
-	jsonKey_GameCommentary_text        = []byte("\"text\":")
-	jsonKey_GameCommentary_visibility  = []byte("\"visibility\":")
+	jsonKey_GameCommentary_dollar_type  = []byte("\"$type\":")
+	jsonKey_GameCommentary_ciphertext   = []byte("\"ciphertext\":")
+	jsonKey_GameCommentary_createdAt    = []byte("\"createdAt\":")
+	jsonKey_GameCommentary_escrowKey    = []byte("\"escrowKey\":")
+	jsonKey_GameCommentary_game         = []byte("\"game\":")
+	jsonKey_GameCommentary_keyId        = []byte("\"keyId\":")
+	jsonKey_GameCommentary_nonce        = []byte("\"nonce\":")
+	jsonKey_GameCommentary_ply          = []byte("\"ply\":")
+	jsonKey_GameCommentary_receiptToken = []byte("\"receiptToken\":")
+	jsonKey_GameCommentary_text         = []byte("\"text\":")
+	jsonKey_GameCommentary_visibility   = []byte("\"visibility\":")
 )
 
 func (s *GameCommentary) MarshalJSON() ([]byte, error) {
@@ -696,6 +731,14 @@ func (s *GameCommentary) AppendJSON(buf []byte) ([]byte, error) {
 		}
 		buf = append(buf, jsonKey_GameCommentary_ply...)
 		buf = cbor.AppendJSONInt(buf, s.Ply.Val())
+		first = false
+	}
+	if s.ReceiptToken.HasVal() {
+		if !first {
+			buf = append(buf, ',')
+		}
+		buf = append(buf, jsonKey_GameCommentary_receiptToken...)
+		buf = cbor.AppendJSONString(buf, s.ReceiptToken.Val())
 		first = false
 	}
 	if s.Text.HasVal() {
@@ -818,6 +861,20 @@ func (s *GameCommentary) UnmarshalJSONAt(data []byte, pos int) (int, error) {
 					return 0, err
 				}
 				s.Ply = gt.Some(v)
+			}
+		case "receiptToken":
+			if cbor.IsJSONNull(data, pos) {
+				pos, err = cbor.SkipJSONNull(data, pos)
+				if err != nil {
+					return 0, err
+				}
+			} else {
+				var v string
+				v, pos, err = cbor.ReadJSONString(data, pos)
+				if err != nil {
+					return 0, err
+				}
+				s.ReceiptToken = gt.Some(v)
 			}
 		case "text":
 			if cbor.IsJSONNull(data, pos) {

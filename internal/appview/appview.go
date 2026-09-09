@@ -144,11 +144,13 @@ func New(ctx context.Context, cfg *config.Config, opts ...Option) (*AppView, err
 	av.writer = writer
 
 	// 6. Game lifecycle: engine registry, moveToken minter, game manager
-	// (with the clock sweeper), and the game XRPC endpoints.
+	// (with the clock sweeper), and the game XRPC endpoints. The manager
+	// gets the escrow key directory for postCommentary validation and the
+	// reveal scheduler (spec §5.7, §8.1–§8.2).
 	av.engines = engine.NewRegistry(engine.NewChess())
 	minter := games.NewTokenMinter(cfg.ServiceDID, av.signingKey)
 	av.games = games.NewManager(cfg, av.pool, av.repos, av.engines, minter, av.writer,
-		logger.With("component", "games"))
+		logger.With("component", "games"), games.WithEscrowKeys(av.escrow))
 	av.xrpc = &xrpcserver.Server{}
 	games.Register(av.xrpc, av.auth, av.games)
 	games.RegisterSubscriptions(av.xrpc, av.games)
@@ -160,6 +162,10 @@ func New(ctx context.Context, cfg *config.Config, opts ...Option) (*AppView, err
 	// bot.plays.bot.flag record in the service repo.
 	av.indexer = indexer.New(cfg, av.pool, av.repos, av.signingKey.Public().(ed25519.PublicKey), av.writer,
 		logger.With("component", "indexer"))
+	// Commentary ingest rides the manager's event bus (#commentaryPosted,
+	// spec §5.4) and the shared escrow directory (§8.4 unwrap).
+	av.indexer.Ingestor().SetBus(av.games.Bus())
+	av.indexer.Ingestor().SetEscrowDirectory(av.escrow)
 	av.matcher = match.NewMatcher(cfg, av.pool, av.repos, av.games,
 		match.ProvisionalRatingSource{}, logger.With("component", "match"),
 		match.WithFlagEmitter(av.indexer.FlagEmitter()))
@@ -172,6 +178,7 @@ func New(ctx context.Context, cfg *config.Config, opts ...Option) (*AppView, err
 		return nil, fmt.Errorf("appview: register match.subscribe: %w", err)
 	}
 	av.games.StartSweeper(cfg.Tunables.SweeperInterval)
+	av.games.StartRevealScheduler(time.Second)
 	av.matcher.StartPairing(cfg.Tunables.PairingInterval)
 	av.indexer.Start()
 

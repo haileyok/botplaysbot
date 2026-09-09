@@ -947,7 +947,29 @@ func (r *FlagsRepo) ListBySubject(ctx context.Context, did string, limit int) ([
 	return out, rows.Err()
 }
 
-// Commentary mirrors the commentary table (spec §8).
+// Escrow status values stored on commentary rows (spec §8.4; an
+// escrow-failed record is treated as sealed-without-escrow).
+const (
+	// EscrowOK marks a valid record: public (revealed at ingest) or
+	// delayed/sealed whose escrowKey unwrapped.
+	EscrowOK = "ok"
+	// EscrowInvalid marks a record that failed §4.6 field validation; it is
+	// never displayed.
+	EscrowInvalid = "invalid"
+	// EscrowFailed marks delayed/sealed whose escrowKey could not be
+	// unwrapped (unknown rotation, bad ephemeral key, tampered wrap).
+	EscrowFailed = "escrowFailed"
+	// EscrowNone marks a sealed record without an escrowKey: valid, but the
+	// AppView can never reveal it unless the agent publishes the key.
+	EscrowNone = "no-escrow"
+	// EscrowDecryptFailed marks escrowed content whose stored key no longer
+	// opens the ciphertext (AAD mismatch, corrupted row); the reveal
+	// scheduler stops retrying it.
+	EscrowDecryptFailed = "decryptFailed"
+)
+
+// Commentary mirrors the commentary table (spec §8, plus the Phase F
+// receipt/publication columns of migration 0005).
 type Commentary struct {
 	URI          string
 	CID          *string
@@ -965,6 +987,15 @@ type Commentary struct {
 	RevealsAtPly *int
 	RevealsAt    *time.Time
 	RevealedAt   *time.Time
+	// ReceiptValid: nil = no receiptToken on the record; false = present
+	// but invalid; true = JWS + digest verified.
+	ReceiptValid *bool
+	// ReceiptRat is the verified receipt's rat (provenance); nil otherwise.
+	ReceiptRat *time.Time
+	// AgentPublished: a matching public key publication was seen (§4.7).
+	AgentPublished bool
+	// KeyMismatch: the agent published a different key for this keyId (§10).
+	KeyMismatch bool
 }
 
 // CommentaryRepo is CRUD for commentary.
@@ -975,13 +1006,14 @@ func NewCommentaryRepo(pool *pgxpool.Pool) *CommentaryRepo { return &CommentaryR
 
 const commentaryColumns = `uri, cid, game_uri, ply, player_did, visibility, text,
 	ciphertext, nonce, key_id, content_key, escrow_status, received_at, reveals_at_ply,
-	reveals_at, revealed_at`
+	reveals_at, revealed_at, receipt_valid, receipt_rat, agent_published, key_mismatch`
 
 func scanCommentary(row pgx.Row) (*Commentary, error) {
 	var c Commentary
 	err := row.Scan(&c.URI, &c.CID, &c.GameURI, &c.Ply, &c.PlayerDID, &c.Visibility,
 		&c.Text, &c.Ciphertext, &c.Nonce, &c.KeyID, &c.ContentKey, &c.EscrowStatus,
-		&c.ReceivedAt, &c.RevealsAtPly, &c.RevealsAt, &c.RevealedAt)
+		&c.ReceivedAt, &c.RevealsAtPly, &c.RevealsAt, &c.RevealedAt,
+		&c.ReceiptValid, &c.ReceiptRat, &c.AgentPublished, &c.KeyMismatch)
 	if err != nil {
 		return nil, mapNotFound(err)
 	}
@@ -992,10 +1024,11 @@ func scanCommentary(row pgx.Row) (*Commentary, error) {
 func (r *CommentaryRepo) Insert(ctx context.Context, c *Commentary) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO commentary (`+commentaryColumns+`)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
 		c.URI, c.CID, c.GameURI, c.Ply, c.PlayerDID, c.Visibility, c.Text,
 		c.Ciphertext, c.Nonce, c.KeyID, c.ContentKey, c.EscrowStatus,
-		c.ReceivedAt, c.RevealsAtPly, c.RevealsAt, c.RevealedAt)
+		c.ReceivedAt, c.RevealsAtPly, c.RevealsAt, c.RevealedAt,
+		c.ReceiptValid, c.ReceiptRat, c.AgentPublished, c.KeyMismatch)
 	return err
 }
 
@@ -1005,30 +1038,68 @@ func (r *CommentaryRepo) Get(ctx context.Context, uri string) (*Commentary, erro
 		`SELECT `+commentaryColumns+` FROM commentary WHERE uri=$1`, uri))
 }
 
-// Reveal marks a record revealed.
-func (r *CommentaryRepo) Reveal(ctx context.Context, uri string, revealedAt time.Time) error {
-	tag, err := r.pool.Exec(ctx,
-		`UPDATE commentary SET revealed_at=$2 WHERE uri=$1`, uri, revealedAt)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// ListDue returns unrevealed records whose reveal time has come.
-func (r *CommentaryRepo) ListDue(ctx context.Context, now time.Time, limit int) ([]Commentary, error) {
+// ListByGame returns every indexed commentary record for the game, oldest
+// first (getState summaries, reveal record assembly, publication checks).
+func (r *CommentaryRepo) ListByGame(ctx context.Context, gameURI string) ([]Commentary, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT `+commentaryColumns+` FROM commentary
-		 WHERE revealed_at IS NULL AND reveals_at IS NOT NULL AND reveals_at <= $1
-		 ORDER BY reveals_at LIMIT $2`, now, limit)
+		`SELECT `+commentaryColumns+` FROM commentary WHERE game_uri=$1
+		 ORDER BY received_at NULLS LAST, uri`, gameURI)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return collectCommentary(rows)
+}
 
+// ListDue returns unrevealed, decryptable delayed records whose wall-clock
+// reveal time has come (the scheduler's timer branch, spec §8.2).
+func (r *CommentaryRepo) ListDue(ctx context.Context, now time.Time, limit int) ([]Commentary, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+commentaryColumns+` FROM commentary
+		 WHERE revealed_at IS NULL AND reveals_at IS NOT NULL AND reveals_at <= $1
+		   AND content_key IS NOT NULL AND escrow_status = $2
+		 ORDER BY reveals_at LIMIT $3`, now, EscrowOK, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectCommentary(rows)
+}
+
+// ListRevealableByGame returns unrevealed, decryptable delayed records of
+// one game whose ply-bound has been reached (the scheduler's move branch,
+// spec §8.2) or whose wall-clock bound has passed.
+func (r *CommentaryRepo) ListRevealableByGame(ctx context.Context, gameURI string, currentPly int64, now time.Time, limit int) ([]Commentary, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+commentaryColumns+` FROM commentary
+		 WHERE game_uri=$1 AND revealed_at IS NULL AND visibility='delayed'
+		   AND content_key IS NOT NULL AND escrow_status = $2
+		   AND ((reveals_at_ply IS NOT NULL AND reveals_at_ply <= $3) OR (reveals_at IS NOT NULL AND reveals_at <= $4))
+		 ORDER BY reveals_at_ply NULLS LAST, uri LIMIT $5`,
+		gameURI, EscrowOK, currentPly, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectCommentary(rows)
+}
+
+// ListEscrowedByGame returns unrevealed escrowed records of one game that
+// hold a content key (the game-end reveal pass, spec §8.2).
+func (r *CommentaryRepo) ListEscrowedByGame(ctx context.Context, gameURI string) ([]Commentary, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT `+commentaryColumns+` FROM commentary
+		 WHERE game_uri=$1 AND revealed_at IS NULL AND content_key IS NOT NULL
+		 ORDER BY received_at NULLS LAST, uri`, gameURI)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectCommentary(rows)
+}
+
+func collectCommentary(rows pgx.Rows) ([]Commentary, error) {
+	defer rows.Close()
 	var out []Commentary
 	for rows.Next() {
 		c, err := scanCommentary(rows)
@@ -1038,6 +1109,105 @@ func (r *CommentaryRepo) ListDue(ctx context.Context, now time.Time, limit int) 
 		out = append(out, *c)
 	}
 	return out, rows.Err()
+}
+
+// RevealWithText marks a record revealed and stores its plaintext. Repeated
+// calls are idempotent (first writer wins; re-revealing is a no-op).
+func (r *CommentaryRepo) RevealWithText(ctx context.Context, uri, text string, revealedAt time.Time) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE commentary SET text=$2, revealed_at=$3
+		 WHERE uri=$1 AND revealed_at IS NULL`, uri, text, revealedAt)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Reveal marks a record revealed (no text change).
+func (r *CommentaryRepo) Reveal(ctx context.Context, uri string, revealedAt time.Time) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE commentary SET revealed_at=$2 WHERE uri=$1 AND revealed_at IS NULL`, uri, revealedAt)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetEscrowStatus rewrites the escrow status (the decryptFailed downgrade).
+func (r *CommentaryRepo) SetEscrowStatus(ctx context.Context, uri, status string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE commentary SET escrow_status=$2 WHERE uri=$1`, uri, status)
+	return err
+}
+
+// MarkPublication ORs the publication marks onto every row of
+// (game, player, keyId): OR semantics preserve earlier detections (a row
+// already marked agent_published stays so, and vice versa). One of
+// agentPublished/mismatch is true.
+func (r *CommentaryRepo) MarkPublication(ctx context.Context, gameURI, playerDID, keyID string, agentPublished, mismatch bool) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE commentary
+		 SET agent_published = agent_published OR $4, key_mismatch = key_mismatch OR $5
+		 WHERE game_uri=$1 AND player_did=$2 AND key_id=$3`,
+		gameURI, playerDID, keyID, agentPublished, mismatch)
+	return err
+}
+
+// MarkReceipt records receipt verification on one row (receiptToken open
+// property, spec §8.2 provenance): valid=true keeps the receipt's rat as
+// provenance; valid=false falls back to ingest receivedAt.
+func (r *CommentaryRepo) MarkReceipt(ctx context.Context, uri string, valid bool, rat *time.Time) error {
+	if !valid {
+		rat = nil
+	}
+	_, err := r.pool.Exec(ctx,
+		`UPDATE commentary SET receipt_valid=$2, receipt_rat=$3 WHERE uri=$1`,
+		uri, valid, rat)
+	return err
+}
+
+// InsertRead logs one commentary_reads row (§10 data capture: reads of
+// unrevealed delayed commentary; requester DID when authenticated, else
+// client IP). Data capture only — no detection logic in v1.
+func (r *CommentaryRepo) InsertRead(ctx context.Context, commentaryURI string, requesterDID, ip *string, ts time.Time) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO commentary_reads (commentary_uri, requester_did, ip, ts) VALUES ($1,$2,$3,$4)`,
+		commentaryURI, requesterDID, ip, ts)
+	return err
+}
+
+// ListReads returns the read rows for one commentary URI (tests).
+func (r *CommentaryRepo) ListReads(ctx context.Context, commentaryURI string) ([]CommentaryRead, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT commentary_uri, requester_did, ip::text, ts FROM commentary_reads
+		 WHERE commentary_uri=$1 ORDER BY ts`, commentaryURI)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CommentaryRead
+	for rows.Next() {
+		var cr CommentaryRead
+		if err := rows.Scan(&cr.CommentaryURI, &cr.RequesterDID, &cr.IP, &cr.TS); err != nil {
+			return nil, err
+		}
+		out = append(out, cr)
+	}
+	return out, rows.Err()
+}
+
+// CommentaryRead is one commentary_reads row.
+type CommentaryRead struct {
+	CommentaryURI string
+	RequesterDID  *string
+	IP            *string
+	TS            time.Time
 }
 
 // Actor mirrors the actors table.

@@ -15,8 +15,10 @@ import (
 	"github.com/haileyok/botplaysbot/internal/clock"
 	"github.com/haileyok/botplaysbot/internal/config"
 	"github.com/haileyok/botplaysbot/internal/engine"
+	"github.com/haileyok/botplaysbot/internal/events"
 	"github.com/haileyok/botplaysbot/internal/games"
 	"github.com/haileyok/botplaysbot/internal/gen/playsbot"
+	"github.com/haileyok/botplaysbot/internal/keys"
 	"github.com/haileyok/botplaysbot/internal/repo"
 )
 
@@ -35,16 +37,24 @@ type Stats struct {
 	// MissingMoves counts missingMoveRecord assertions emitted by the
 	// missing-record sweep (§10).
 	MissingMoves atomic.Uint64
+	// CommentaryIndexed counts commentary records stored (any escrow
+	// status; spec §8.4).
+	CommentaryIndexed atomic.Uint64
+	// KeyMismatches counts keyMismatch flags raised by publication
+	// detection (§10).
+	KeyMismatches atomic.Uint64
 }
 
 // snapshot copies the counters under a mutex-free consistent-enough view
 // (individual counters are atomics; the tuple is not a transaction).
 type StatsSnapshot struct {
-	EventsHandled   uint64
-	IgnoredForeign  uint64
-	MovesLinked     uint64
-	UnverifiedMoves uint64
-	MissingMoves    uint64
+	EventsHandled     uint64
+	IgnoredForeign    uint64
+	MovesLinked       uint64
+	UnverifiedMoves   uint64
+	MissingMoves      uint64
+	CommentaryIndexed uint64
+	KeyMismatches     uint64
 }
 
 // IdentityCache maps DIDs to handles, updated from #identity events on
@@ -91,6 +101,14 @@ type Ingestor struct {
 	log     *slog.Logger
 	now     func() time.Time
 
+	// escrow resolves AppView escrow rotations for commentary unwrap
+	// (spec §8.4 step 2). Wired via SetEscrowDirectory; nil disables
+	// unwrapping (every escrowKey then indexes escrowFailed).
+	escrow keys.EscrowKeyDirectory
+	// bus carries #commentaryPosted events on ingest (spec §5.4). Wired
+	// via SetBus; nil skips publication.
+	bus *events.Bus
+
 	stats Stats
 }
 
@@ -115,13 +133,22 @@ func (in *Ingestor) Identities() *IdentityCache { return in.identity }
 // SnapshotStats reads the ingest counters.
 func (in *Ingestor) SnapshotStats() StatsSnapshot {
 	return StatsSnapshot{
-		EventsHandled:   in.stats.EventsHandled.Load(),
-		IgnoredForeign:  in.stats.IgnoredForeign.Load(),
-		MovesLinked:     in.stats.MovesLinked.Load(),
-		UnverifiedMoves: in.stats.UnverifiedMoves.Load(),
-		MissingMoves:    in.stats.MissingMoves.Load(),
+		EventsHandled:     in.stats.EventsHandled.Load(),
+		IgnoredForeign:    in.stats.IgnoredForeign.Load(),
+		MovesLinked:       in.stats.MovesLinked.Load(),
+		UnverifiedMoves:   in.stats.UnverifiedMoves.Load(),
+		MissingMoves:      in.stats.MissingMoves.Load(),
+		CommentaryIndexed: in.stats.CommentaryIndexed.Load(),
+		KeyMismatches:     in.stats.KeyMismatches.Load(),
 	}
 }
+
+// SetEscrowDirectory wires the escrow key directory (commentary unwrap,
+// spec §8.4). Call before any commentary event is processed.
+func (in *Ingestor) SetEscrowDirectory(dir keys.EscrowKeyDirectory) { in.escrow = dir }
+
+// SetBus wires the event bus for #commentaryPosted emission (spec §5.4).
+func (in *Ingestor) SetBus(bus *events.Bus) { in.bus = bus }
 
 // Handle applies the ingest rules to one event. Never fails: problems are
 // counted and logged (ingest must never take down the stream loop).
@@ -174,10 +201,7 @@ func (in *Ingestor) HandleCtx(ctx context.Context, ev RepoEvent) {
 		in.ingestProfile(ctx, ev)
 
 	case playsbot.NSIDGameCommentary:
-		// TODO(Phase F): commentary ingest (spec §8.4). When Phase F
-		// lands, this switch arm calls in.ingestCommentary(ctx, ev) and
-		// the reveal scheduler consumes the commentary rows. Deliberately
-		// a silent no-op for now (do not index unvalidated ciphertext).
+		in.ingestCommentary(ctx, ev)
 
 	default:
 		in.log.Debug("indexer: no rule for collection", "collection", ev.Collection)

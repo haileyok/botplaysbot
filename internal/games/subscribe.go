@@ -121,6 +121,30 @@ func gameMessage(ev events.Event) (*playsbot.GameSubscribe_Message, string) {
 				Player: ev.OfferedBy,
 			}),
 		}, "#drawOffered"
+	case events.KindCommentaryPosted:
+		mv := &playsbot.GameSubscribe_CommentaryPosted{
+			Game:       ev.GameURI,
+			Player:     ev.CommentaryPosted.Player,
+			Ply:        ev.CommentaryPosted.Ply,
+			Visibility: ev.CommentaryPosted.Visibility,
+		}
+		// Only unrevealed delayed commentary carries reveal bounds (spec
+		// §5.4: commentary events never carry text until revealed).
+		if ev.CommentaryPosted.RevealsAt != nil {
+			mv.RevealsAt = gt.Some(RFC3339Millis(*ev.CommentaryPosted.RevealsAt))
+		}
+		if ev.CommentaryPosted.RevealsAtPly != nil {
+			mv.RevealsAtPly = gt.Some(*ev.CommentaryPosted.RevealsAtPly)
+		}
+		return &playsbot.GameSubscribe_Message{GameSubscribe_CommentaryPosted: gt.SomeRef(*mv)}, "#commentaryPosted"
+	case events.KindCommentaryRevealed:
+		mv := &playsbot.GameSubscribe_CommentaryRevealed{
+			Game:   ev.GameURI,
+			Player: ev.CommentaryRevealed.Player,
+			Ply:    ev.CommentaryRevealed.Ply,
+			Text:   ev.CommentaryRevealed.Text,
+		}
+		return &playsbot.GameSubscribe_Message{GameSubscribe_CommentaryRevealed: gt.SomeRef(*mv)}, "#commentaryRevealed"
 	case events.KindGameFinished:
 		if ev.Result == nil {
 			return nil, ""

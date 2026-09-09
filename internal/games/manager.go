@@ -12,11 +12,16 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jcalabro/gt"
 
 	"github.com/haileyok/botplaysbot/internal/clock"
 	"github.com/haileyok/botplaysbot/internal/config"
 	"github.com/haileyok/botplaysbot/internal/engine"
+	"github.com/haileyok/botplaysbot/internal/escrow"
 	"github.com/haileyok/botplaysbot/internal/events"
+	"github.com/haileyok/botplaysbot/internal/gen/playsbot"
+	"github.com/haileyok/botplaysbot/internal/gen/playsbot/comatproto"
+	"github.com/haileyok/botplaysbot/internal/keys"
 	"github.com/haileyok/botplaysbot/internal/repo"
 	"github.com/haileyok/botplaysbot/internal/servicerepo"
 	"github.com/haileyok/botplaysbot/internal/tid"
@@ -102,6 +107,9 @@ type GameView struct {
 	LegalMoves      []engine.Payload
 	Clocks          []events.Clock
 	History         []MoveEntry
+	// Commentary holds the getState commentary summaries (spec §5.2):
+	// text only when revealed, reveal bounds on unrevealed delayed items.
+	Commentary []CommentaryEntry
 	// DrawOfferDID is the pending draw offer holder, if any.
 	DrawOfferDID string
 	// ServerTime is the AppView time the view was assembled at.
@@ -154,6 +162,19 @@ func (m *ed25519Minter) Mint(playerDID, gameURI string, ply int64, payload json.
 	return mintMoveToken(m.priv, m.serviceDID, playerDID, gameURI, ply, payload, receivedAt)
 }
 
+// MintReceipt signs a postCommentary receiptToken (spec §5.7) with the
+// same service key as moveTokens.
+func (m *ed25519Minter) MintReceipt(playerDID, gameURI string, ply int64, digest string, receivedAt time.Time) (string, error) {
+	return mintReceiptToken(m.priv, m.serviceDID, playerDID, gameURI, ply, digest, receivedAt)
+}
+
+// ReceiptMinter is the optional receiptToken-signing capability of a
+// TokenMinter. Production Ed25519 minter implements it; test fakes need
+// it only when they exercise postCommentary.
+type ReceiptMinter interface {
+	MintReceipt(playerDID, gameURI string, ply int64, digest string, receivedAt time.Time) (string, error)
+}
+
 // ---------------------------------------------------------------------------
 // Manager
 
@@ -171,6 +192,10 @@ type Manager struct {
 	minter  TokenMinter
 	writer  *servicerepo.Writer
 	bus     *events.Bus
+	// escrow resolves AppView escrow rotations for postCommentary
+	// validation and the reveal scheduler (spec §8.1). Optional until
+	// wired via WithEscrowKeys; nil disables unwrap-dependent behavior.
+	escrow keys.EscrowKeyDirectory
 
 	// finishHook observes game finishes (set via SetFinishHook before any
 	// game can finish; read without a lock because registration is boot-time).
@@ -178,16 +203,19 @@ type Manager struct {
 
 	now func() time.Time
 
-	sweepStop chan struct{}
-	sweepDone chan struct{}
+	sweepStop  chan struct{}
+	sweepDone  chan struct{}
+	revealStop chan struct{}
+	revealDone chan struct{}
 }
 
 // ManagerOption customizes construction (tests).
 type ManagerOption func(*managerOptions)
 
 type managerOptions struct {
-	now func() time.Time
-	bus *events.Bus
+	now    func() time.Time
+	bus    *events.Bus
+	escrow keys.EscrowKeyDirectory
 }
 
 // WithNow overrides the manager's clock (tests).
@@ -198,6 +226,12 @@ func WithNow(now func() time.Time) ManagerOption {
 // WithBus injects a bus instead of creating one (tests that inspect events).
 func WithBus(bus *events.Bus) ManagerOption {
 	return func(o *managerOptions) { o.bus = bus }
+}
+
+// WithEscrowKeys injects the escrow key directory (postCommentary unwrap,
+// reveal scheduler, game-end reveal; spec §8.1–§8.2).
+func WithEscrowKeys(dir keys.EscrowKeyDirectory) ManagerOption {
+	return func(o *managerOptions) { o.escrow = dir }
 }
 
 // NewManager assembles the game manager.
@@ -220,6 +254,7 @@ func NewManager(cfg *config.Config, pool *pgxpool.Pool, repos *repo.Pool, engine
 		minter:  minter,
 		writer:  writer,
 		bus:     bus,
+		escrow:  o.escrow,
 		now:     o.now,
 	}
 }
@@ -253,12 +288,18 @@ func (m *Manager) SeatOrder(gameType, variant string) ([]string, error) {
 	return eng.Seats(variant)
 }
 
-// Close stops the sweeper, if started.
+// Close stops the background loops (clock sweeper, reveal scheduler), if
+// started.
 func (m *Manager) Close() {
 	if m.sweepStop != nil {
 		close(m.sweepStop)
 		<-m.sweepDone
 		m.sweepStop = nil
+	}
+	if m.revealStop != nil {
+		close(m.revealStop)
+		<-m.revealDone
+		m.revealStop = nil
 	}
 }
 
@@ -700,6 +741,16 @@ func (m *Manager) SubmitMove(ctx context.Context, p SubmitMoveParams) (*Acceptan
 	ev.Move.ReceivedAt = p.ReceivedAt
 	m.bus.Publish(ev)
 
+	// Reveal scheduler, move branch (spec §8.2): delayed commentary whose
+	// ply bound (or already-passed time bound) is satisfied by this
+	// acceptance reveals now. A game-ending move goes through afterFinish's
+	// reveal-all instead.
+	if result == nil {
+		if err := m.RevealPlyPass(ctx, g.URI, p.Ply); err != nil {
+			m.logger.Error("games: reveal ply pass failed", "game", g.URI, "err", err)
+		}
+	}
+
 	if result != nil {
 		m.afterFinish(ctx, g, st2, result)
 	}
@@ -792,10 +843,215 @@ func (m *Manager) afterFinish(ctx context.Context, g *repo.Game, st engine.State
 	m.bus.Publish(events.Event{Kind: events.KindGameFinished, GameURI: g.URI, Result: result})
 }
 
-// revealAll is the Phase F hook: at game end, decrypt all escrowed
-// commentary, write the bot.plays.bot.game.reveal record, and push
-// #commentaryRevealed events (spec §8.2/§8.3).
-func (m *Manager) revealAll(ctx context.Context, gameURI string) {}
+// revealAll is the game-end reveal pass (spec §8.2, §8.3 policy 3: nothing
+// stays private): decrypt every still-hidden escrowed commentary (delayed
+// not yet revealed + sealed), push #commentaryRevealed for each, and write
+// bot.plays.bot.game.reveal with every key the server holds unwrapped.
+//
+// Records that can never be revealed (escrowFailed, sealed without an
+// escrowKey, decryptFailed) stay unrevealed with their escrow_status —
+// getState surfaces them as never-revealed entries without text. The
+// reveal record carries only recoverable keys; a game whose keys are all
+// unrecoverable writes no record.
+//
+// Reason mapping (judgment call, documented): result reason timeout or
+// abandonment → "abandonment" (the game did not reach a natural end, so
+// the reveal is an abandonment cleanup); adjudication → "adjudication";
+// everything else → "gameEnd".
+func (m *Manager) revealAll(ctx context.Context, gameURI string) {
+	g, err := m.repos.Games.Get(ctx, gameURI)
+	if err != nil {
+		m.logger.Error("games: reveal-all: game lookup failed", "game", gameURI, "err", err)
+		return
+	}
+	now := m.now()
+
+	// 1. Reveal everything decryptable that is still hidden.
+	hidden, err := m.repos.Commentary.ListEscrowedByGame(ctx, gameURI)
+	if err != nil {
+		m.logger.Error("games: reveal-all: commentary lookup failed", "game", gameURI, "err", err)
+	}
+	for i := range hidden {
+		m.revealOne(ctx, hidden[i], now)
+	}
+
+	// 2. Collect the reveal record's keys: every (player, keyId) the server
+	// holds an unwrapped content key for, with its publication marks.
+	rows, err := m.repos.Commentary.ListByGame(ctx, gameURI)
+	if err != nil {
+		m.logger.Error("games: reveal-all: key collection failed", "game", gameURI, "err", err)
+		return
+	}
+	type keyID struct{ player, keyID string }
+	agg := map[keyID]*playsbot.GameReveal_RevealedKey{}
+	var order []keyID
+	for _, c := range rows {
+		if len(c.ContentKey) != escrow.KeySize || c.KeyID == nil || c.PlayerDID == nil {
+			continue
+		}
+		k := keyID{player: *c.PlayerDID, keyID: *c.KeyID}
+		entry, ok := agg[k]
+		if !ok {
+			keyBytes := append([]byte(nil), c.ContentKey...)
+			entry = &playsbot.GameReveal_RevealedKey{
+				Player: k.player,
+				KeyId:  k.keyID,
+				Key:    keyBytes,
+			}
+			agg[k] = entry
+			order = append(order, k)
+		}
+		entry.AgentPublished = gt.Some(entry.AgentPublished.ValOr(false) || c.AgentPublished)
+		entry.Mismatch = gt.Some(entry.Mismatch.ValOr(false) || c.KeyMismatch)
+	}
+
+	// 3. Write the record. The strongRef needs the game record's CID; when
+	// the service account never round-tripped a CID (inert PDS), rows still
+	// revealed but no public record exists.
+	if len(order) == 0 || g.CID == nil {
+		if len(order) > 0 {
+			m.logger.Warn("games: reveal-all: no game CID; reveal record skipped",
+				"game", gameURI, "keys", len(order))
+		}
+		return
+	}
+	ref := comatproto.RepoStrongRef{URI: gameURI, CID: *g.CID}
+	var result events.Result
+	if len(g.Result) > 0 {
+		_ = json.Unmarshal(g.Result, &result)
+	}
+	rec := &playsbot.GameReveal{
+		Game:      ref,
+		Reason:    revealReason(&result),
+		CreatedAt: RFC3339Millis(now),
+	}
+	for _, k := range order {
+		rec.Keys = append(rec.Keys, *agg[k])
+	}
+	if _, err := m.writer.WriteRevealRecord(ctx, rec); err != nil {
+		if !errors.Is(err, servicerepo.ErrNotConfigured) {
+			m.logger.Error("games: reveal record write failed", "game", gameURI, "err", err)
+		}
+	}
+}
+
+// revealReason maps a finished game's result reason to the reveal record's
+// reason (spec §4.7 knownValues; see revealAll for the mapping rationale).
+func revealReason(result *events.Result) string {
+	if result != nil {
+		switch result.Reason {
+		case "timeout", "abandonment":
+			return "abandonment"
+		case "adjudication":
+			return "adjudication"
+		}
+	}
+	return "gameEnd"
+}
+
+// ---------------------------------------------------------------------------
+// Reveal scheduler (spec §8.2, §8.4 step 4)
+
+// StartRevealScheduler launches the wall-clock reveal ticker (spec: 1s).
+// Safe to call once; stop via Close.
+func (m *Manager) StartRevealScheduler(interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Second
+	}
+	m.revealStop = make(chan struct{})
+	m.revealDone = make(chan struct{})
+	go func() {
+		defer close(m.revealDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.revealStop:
+				return
+			case <-ticker.C:
+				if err := m.RevealTimerPass(context.Background()); err != nil {
+					m.logger.Error("games: reveal timer pass failed", "err", err)
+				}
+			}
+		}
+	}()
+}
+
+// RevealPlyPass reveals every delayed commentary of one game whose reveal
+// bound (ply N+P or wall-clock) is satisfied at currentPly. Called on each
+// accepted move — "whichever comes first" (spec §8.2).
+func (m *Manager) RevealPlyPass(ctx context.Context, gameURI string, currentPly int64) error {
+	due, err := m.repos.Commentary.ListRevealableByGame(ctx, gameURI, currentPly, m.now(), 200)
+	if err != nil {
+		return err
+	}
+	now := m.now()
+	for i := range due {
+		m.revealOne(ctx, due[i], now)
+	}
+	return nil
+}
+
+// RevealTimerPass reveals every delayed commentary whose wall-clock bound
+// (ingest receivedAt + S) has passed, across all games. The ticker branch
+// keeps stalled games broadcasting (spec §8.2 rationale).
+func (m *Manager) RevealTimerPass(ctx context.Context) error {
+	now := m.now()
+	due, err := m.repos.Commentary.ListDue(ctx, now, 200)
+	if err != nil {
+		return err
+	}
+	for i := range due {
+		m.revealOne(ctx, due[i], now)
+	}
+	return nil
+}
+
+// revealOne decrypts and reveals one escrowed commentary row: content key
+// + AAD check (spec §8.1), text + revealed_at persisted, #commentaryRevealed
+// pushed. Undecryptable content downgrades the row to decryptFailed so the
+// scheduler stops retrying it (it stays visible as never-revealed).
+func (m *Manager) revealOne(ctx context.Context, c repo.Commentary, now time.Time) {
+	player := deref(c.PlayerDID)
+	ply := int64(0)
+	if c.Ply != nil {
+		ply = int64(*c.Ply)
+	}
+	if len(c.ContentKey) != escrow.KeySize || len(c.Nonce) != escrow.NonceSize {
+		m.failReveal(ctx, c, "stored key material is unusable")
+		return
+	}
+	var key escrow.ContentKey
+	copy(key[:], c.ContentKey)
+	var nonce [escrow.NonceSize]byte
+	copy(nonce[:], c.Nonce)
+	text, err := escrow.Decrypt(key, nonce, c.Ciphertext, escrow.AAD(c.GameURI, ply, player))
+	if err != nil {
+		m.failReveal(ctx, c, "decryption failed (key or AAD mismatch)")
+		return
+	}
+	if err := m.repos.Commentary.RevealWithText(ctx, c.URI, string(text), now); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return // revealed concurrently; skip the duplicate event
+		}
+		m.logger.Error("games: reveal persist failed", "uri", c.URI, "err", err)
+		return
+	}
+	ev := events.Event{Kind: events.KindCommentaryRevealed, GameURI: c.GameURI}
+	ev.CommentaryRevealed.Ply = ply
+	ev.CommentaryRevealed.Player = player
+	ev.CommentaryRevealed.Text = string(text)
+	m.bus.Publish(ev)
+}
+
+// failReveal downgrades a row that cannot be decrypted so the scheduler
+// stops retrying, and logs (the row stays a never-revealed entry).
+func (m *Manager) failReveal(ctx context.Context, c repo.Commentary, why string) {
+	if err := m.repos.Commentary.SetEscrowStatus(ctx, c.URI, repo.EscrowDecryptFailed); err != nil {
+		m.logger.Error("games: decryptFailed mark failed", "uri", c.URI, "err", err)
+	}
+	m.logger.Warn("games: commentary never revealed", "uri", c.URI, "game", c.GameURI, "why", why)
+}
 
 // ---------------------------------------------------------------------------
 // Resign and draws (spec §5.6)
@@ -932,6 +1188,11 @@ func (m *Manager) GetState(ctx context.Context, q StateQuery) (*GameView, error)
 		return nil, err
 	}
 	view.History = moveEntries(rows)
+	commentary, err := m.repos.Commentary.ListByGame(ctx, g.URI)
+	if err != nil {
+		return nil, err
+	}
+	view.Commentary = buildCommentaryEntries(commentary)
 	return view, nil
 }
 

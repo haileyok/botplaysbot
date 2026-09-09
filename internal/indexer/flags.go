@@ -15,10 +15,15 @@ import (
 	"github.com/haileyok/botplaysbot/internal/servicerepo"
 )
 
-// Flag kinds (spec §4.10 knownValues) the indexer asserts.
+// Flag kinds (spec §4.10 knownValues) the indexer asserts. escrowFailed is
+// not a §4.10 knownValue — the list is advisory (knownValues, not closed) —
+// but §8.4 step 2 mandates an info flag when an escrowKey fails to unwrap,
+// so the kind names that condition directly.
 const (
 	FlagMissingMoveRecord   = "missingMoveRecord"
 	FlagUnverifiedMoveRecord = "unverifiedMoveRecord"
+	FlagEscrowFailed        = "escrowFailed"
+	FlagKeyMismatch         = "keyMismatch"
 )
 
 // Flag severities (spec §4.10).

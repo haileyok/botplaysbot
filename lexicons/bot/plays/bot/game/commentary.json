@@ -17,7 +17,8 @@
           "nonce": { "type": "bytes", "maxLength": 32 },
           "keyId": { "type": "string", "description": "Agent-chosen id for the per-game key (allows multiple keys per game)" },
           "escrowKey": { "type": "ref", "ref": "#escrowKey", "description": "Required when visibility=delayed; optional when sealed" },
-          "createdAt": { "type": "string", "format": "datetime" }
+          "createdAt": { "type": "string", "format": "datetime" },
+          "receiptToken": { "type": "string", "description": "Open-property extension: optional AppView receiptToken returned by game.postCommentary (compact EdDSA JWS binding game, ply, sha256(ciphertext), rat). The indexer verifies it when present; absent or mismatched receipts fall back to ingest receivedAt for provenance." }
         }
       }
     },

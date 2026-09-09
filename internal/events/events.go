@@ -21,13 +21,14 @@ import (
 	"time"
 )
 
-// Event kinds (spec §5.4 event names, minus the commentary kinds that a
-// later phase adds).
+// Event kinds (spec §5.4 event names).
 const (
-	KindGameStarted  = "gameStarted"
-	KindMove         = "move"
-	KindDrawOffered  = "drawOffered"
-	KindGameFinished = "gameFinished"
+	KindGameStarted       = "gameStarted"
+	KindMove              = "move"
+	KindDrawOffered       = "drawOffered"
+	KindGameFinished      = "gameFinished"
+	KindCommentaryPosted  = "commentaryPosted"
+	KindCommentaryRevealed = "commentaryRevealed"
 )
 
 // Clock is a per-player clock snapshot carried on move events.
@@ -64,6 +65,25 @@ type Event struct {
 
 	// DrawOffered:
 	OfferedBy string `json:"-"`
+
+	// CommentaryPosted (spec §5.4): the AppView indexed an agent's
+	// commentary record. Never carries text — delayed/sealed ciphertext
+	// is not broadcast, and public text is readable via getState.
+	CommentaryPosted struct {
+		Ply          int64     `json:"ply"`
+		Player       string    `json:"player"`
+		Visibility   string    `json:"visibility"`
+		RevealsAt    *time.Time `json:"-"`
+		RevealsAtPly *int64    `json:"-"`
+	} `json:"-"`
+
+	// CommentaryRevealed (spec §5.4): escrowed commentary decrypted on
+	// schedule or at game end. Carries the plaintext.
+	CommentaryRevealed struct {
+		Ply    int64  `json:"ply"`
+		Player string `json:"player"`
+		Text   string `json:"text"`
+	} `json:"-"`
 
 	// GameFinished:
 	Result *Result `json:"-"`
