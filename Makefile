@@ -22,17 +22,21 @@ build:
 test:
 	go test -count=1 ./...
 	pnpm --filter web test
+	pnpm --filter @plays-bot/client test
+	pnpm --filter @plays-bot/bots test
 
 ## lint: go vet + web eslint
 lint:
 	go vet ./...
 	pnpm --filter web lint
 
-## typecheck: compile Go tests + tsc for web
+## typecheck: compile Go tests + tsc for web + packages
 typecheck:
 	go build ./...
 	go test -run '^$$' -count=1 ./...
 	pnpm --filter web typecheck
+	pnpm --filter @plays-bot/client typecheck
+	pnpm --filter @plays-bot/bots typecheck
 
 ## dev: run the appview locally (placeholder; later phases add frontend watch)
 dev:

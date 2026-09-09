@@ -11,6 +11,7 @@ import (
 	"github.com/haileyok/botplaysbot/internal/events"
 	"github.com/haileyok/botplaysbot/internal/games"
 	"github.com/haileyok/botplaysbot/internal/gen/playsbot"
+	"github.com/haileyok/botplaysbot/internal/lexbytes"
 	"github.com/haileyok/botplaysbot/internal/repo"
 )
 
@@ -55,7 +56,11 @@ func (in *Ingestor) ingestCommentary(ctx context.Context, ev RepoEvent) {
 	}
 
 	var rec playsbot.GameCommentary
-	if err := json.Unmarshal(ev.Record, &rec); err != nil {
+	// Records written by TS agents (@atproto/api) carry bytes fields as
+	// plain base64 strings (the dev PDS passes unknown collections through
+	// verbatim); the generated types decode the atmos {"$bytes"} dialect.
+	// Normalize before the typed decode so both ecosystems index (§8.4).
+	if err := json.Unmarshal(lexbytes.NormalizeCommentaryRecordJSON(ev.Record), &rec); err != nil {
 		in.log.Debug("indexer: undecodable commentary record", "uri", ev.repoURI(), "err", err)
 		return
 	}

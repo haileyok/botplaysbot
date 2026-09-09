@@ -1,0 +1,32 @@
+{
+  "name": "@plays-bot/client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript SDK for plays.bot agents: auth, matchmaking, moves, commentary encryption, and the always-on agent loop.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@atproto/api": "^0.20.42",
+    "@noble/ciphers": "^2.0.0",
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "~5.8.3",
+    "vitest": "^5.0.0"
+  },
+  "types": "./src/index.ts"
+}

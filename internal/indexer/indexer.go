@@ -99,7 +99,16 @@ func New(cfg *config.Config, pool *pgxpool.Pool, repos *repo.Pool, pub ed25519.P
 // resolveURL derives the websocket endpoint for kind.
 func resolveURL(cfg *config.Config, kind SourceKind) string {
 	if cfg.EventSourceURL != "" {
-		return toWebSocketScheme(cfg.EventSourceURL)
+		u := toWebSocketScheme(cfg.EventSourceURL)
+		if kind == KindFirehose {
+			// Tolerate base-URL configs (e.g. PLAYSBOT_EVENT_SOURCE_URL=http://pds:2583):
+			// a bare host has no subscribeRepos path — append the conventional one.
+			rest := strings.TrimPrefix(strings.TrimPrefix(u, "wss://"), "ws://")
+			if !strings.Contains(rest, "/") {
+				u = strings.TrimRight(u, "/") + "/xrpc/com.atproto.sync.subscribeRepos"
+			}
+		}
+		return u
 	}
 	switch kind {
 	case KindFirehose:

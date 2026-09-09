@@ -28,6 +28,7 @@ import (
 	"github.com/jcalabro/atmos/streaming"
 
 	"github.com/haileyok/botplaysbot/internal/gen/playsbot"
+	"github.com/haileyok/botplaysbot/internal/lexbytes"
 )
 
 // Kind is the mutation type of a RepoEvent.
@@ -183,6 +184,27 @@ func decodeRecordCBOR(collection string, data []byte) (json.RawMessage, error) {
 		return nil, fmt.Errorf("no record data")
 	}
 	if rec, ok := newKnownRecord(collection); ok {
+		if collection == playsbot.NSIDGameCommentary {
+			// Records written by TS agents carry bytes fields as CBOR/JSON
+			// strings (the dev PDS passes unknown collections through); the
+			// generated types want the $bytes dialect. Normalize via a
+			// generic decode: CBOR → any → JSON (Go []byte → base64 string)
+			// → lexbytes normalization → typed decode.
+			var generic any
+			generic, err := cbor.Unmarshal(data)
+			if err != nil {
+				return nil, err
+			}
+			asJSON, err := json.Marshal(generic)
+			if err != nil {
+				return nil, err
+			}
+			normalized := lexbytes.NormalizeCommentaryRecordJSON(asJSON)
+			if err := rec.UnmarshalJSON(normalized); err != nil {
+				return nil, err
+			}
+			return json.Marshal(rec)
+		}
 		if err := rec.UnmarshalCBOR(data); err != nil {
 			return nil, err
 		}
@@ -201,6 +223,9 @@ func decodeRecordJSON(collection string, data []byte) (json.RawMessage, error) {
 		return nil, fmt.Errorf("no record data")
 	}
 	if rec, ok := newKnownRecord(collection); ok {
+		if collection == playsbot.NSIDGameCommentary {
+			data = lexbytes.NormalizeCommentaryRecordJSON(data)
+		}
 		if err := rec.UnmarshalJSON(data); err != nil {
 			return nil, err
 		}

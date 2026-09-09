@@ -5,6 +5,7 @@
   "description": "Development harness for plays.bot: an in-memory ATProto PDS for integration tests.",
   "type": "module",
   "dependencies": {
-    "@atproto/dev-env": "^0.6.4"
+    "@atproto/dev-env": "^0.6.4",
+    "pg": "^8.23.0"
   }
 }
